@@ -235,3 +235,11 @@ Direction from the user: training data comes from labeled datasets they find; th
 - Google Drive folder/OAuth, Kaggle kernel reference/authentication and detector weights remain unset. The configured approved cache has no real model manifest; the development registry contains no approved real model. Temporal metadata/grouping and mapping review are still missing. These block real training/inference/cloud acceptance, not local implementation or fixture tests.
 - These values belong in the local ignored `.env` or their provider-specific local auth files. Nothing is embedded in notebook or source code.
 - Temporal video/person/time annotations and real-video acceptance data have not been verified in this workspace.
+
+## Checkpoint 2026-10-26 (late): image mode, optional review, shared setup
+
+- **Tests run:** full regression 262/262 passed (`scripts/run_regression.py`, shared Neon DB URLs blanked so no test touches it). The result file `reports/regression-results.json` is regenerated on each run and is no longer versioned.
+- **Real cloud checks:** `prepare_only` on Kaggle T4 completed (9,997 images, 18,506 boxes, 0 malformed); `remote_smoke` completed (Tesla T4, CUDA, gradients received; synthetic input only, creates no model). A `train_candidate` job in image mode (ImageNet init, 10 image epochs, Alanoud only) was submitted; its result is not recorded here until collected and evaluated.
+- **Code written:** image-only training branch (video frames first, then images; video frames sampled per person every 500 ms, label changes always kept, at most 300 per video), `image_tracked` bundle kind with per-track score aggregation at inference, optional (advisory) data review with automatic rules and AI verdicts, UTF-8-safe CLI output. The web UI trains the image branch only; the temporal branch remains reachable through the API.
+- **Not verified:** accuracy of any model (none evaluated yet); aggregation parameters are unbenchmarked defaults; no labeled video source exists, so the video-frame phase has been tested only on synthetic fixtures; setup by a second person with their own Kaggle/Google accounts has not been tried.
+- **Repository:** git root moved to `DrowningProject`; `codex-cli-handoff` is outside the repository.
