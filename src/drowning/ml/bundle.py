@@ -14,6 +14,9 @@ from typing import Any
 from drowning.ml.model import CLASS_KEYS, MODEL_SCHEMA_VERSION, ONTOLOGY_ID, ONTOLOGY_VERSION, DrowningTemporalModel, torch
 
 
+MODEL_KINDS = ("temporal", "image_tracked")
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -39,7 +42,10 @@ def save_bundle(model: DrowningTemporalModel, destination: Path, *, completion_k
                 recipe_fingerprint: str | None = None, code_fingerprint: str | None = None,
                 training_job_id: str | None = None, remote_kernel_ref: str | None = None,
                 remote_kernel_version: str | None = None, parent_model_version: str | None = None,
-                model_version_id: str | None = None) -> dict[str, Any]:
+                model_version_id: str | None = None, model_kind: str = "temporal",
+                aggregation: dict[str, Any] | None = None) -> dict[str, Any]:
+    if model_kind not in MODEL_KINDS:
+        raise ValueError(f"model_kind must be one of {', '.join(MODEL_KINDS)}")
     if completion_kind not in {"synthetic_smoke", "candidate", "approved"}:
         raise ValueError("completion_kind must be synthetic_smoke, candidate, or approved")
     if completion_kind == "approved":
@@ -49,6 +55,14 @@ def save_bundle(model: DrowningTemporalModel, destination: Path, *, completion_k
         raise ValueError("model bundles require size, context_fraction, mean and std preprocessing metadata")
     if len(preprocessing["mean"]) != 3 or len(preprocessing["std"]) != 3:
         raise ValueError("preprocessing mean/std must have three channels")
+    if model_kind == "image_tracked":
+        from drowning.inference.aggregation import validate_aggregation
+
+        if temporal_trained:
+            raise ValueError("an image_tracked bundle has no trained temporal head")
+        problems = validate_aggregation(aggregation)
+        if problems:
+            raise ValueError("image_tracked bundles require a valid aggregation contract: " + "; ".join(problems))
     if temporal_trained:
         required_contract = {"sequence_length", "sample_period_ms", "max_track_gap_ms", "causal"}
         if not isinstance(temporal_contract, dict) or not required_contract.issubset(temporal_contract):
@@ -93,6 +107,8 @@ def save_bundle(model: DrowningTemporalModel, destination: Path, *, completion_k
             "model_version_id": model_version_id,
             "initialization": {"encoder_pretrained": model.pretrained_encoder,
                                "weights_source": "torchvision_default_imagenet" if model.pretrained_encoder else "random_initialization"},
+            "model_kind": model_kind,
+            "aggregation": aggregation if model_kind == "image_tracked" else None,
             "temporal_trained": bool(temporal_trained),
             "completion_kind": completion_kind,
             "files": {"weights.pt": {"sha256": sha256_file(weights_path), "bytes": weights_path.stat().st_size}},
@@ -120,9 +136,19 @@ def validate_manifest(manifest: dict[str, Any], *, require_temporal: bool = True
         errors.append("bundle preprocessing contract is missing")
     elif len(preprocessing.get("mean", [])) != 3 or len(preprocessing.get("std", [])) != 3:
         errors.append("bundle preprocessing mean/std must have three channels")
-    if require_temporal and not manifest.get("temporal_trained", False):
+    kind = manifest.get("model_kind", "temporal")
+    if kind not in MODEL_KINDS:
+        errors.append("unknown model_kind")
+    if kind == "image_tracked":
+        # Image encoder + per-track aggregation: usable for inference without a trained temporal head.
+        from drowning.inference.aggregation import validate_aggregation
+
+        if manifest.get("temporal_trained"):
+            errors.append("an image_tracked bundle cannot claim a trained temporal head")
+        errors.extend(validate_aggregation(manifest.get("aggregation")))
+    elif require_temporal and not manifest.get("temporal_trained", False):
         errors.append("bundle has no trained temporal head")
-    if require_temporal:
+    if require_temporal and kind != "image_tracked":
         contract = manifest.get("temporal_contract")
         required_contract = {"sequence_length", "sample_period_ms", "max_track_gap_ms", "causal"}
         if not isinstance(contract, dict) or not required_contract.issubset(contract) or contract.get("causal") is not True:

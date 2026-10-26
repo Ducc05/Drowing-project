@@ -139,8 +139,8 @@ def review_model_version(session: Session, model_version_id: UUID, *, decision: 
     if model.status != "candidate":
         raise ModelReviewError("only a candidate model can be reviewed")
     if decision == "approve":
-        if model.completion_kind != "candidate" or not model.temporal_trained:
-            raise ModelReviewError("only a completed temporal candidate can be approved")
+        if model.model_kind is None:
+            raise ModelReviewError("only a completed temporal or image_tracked candidate can be approved")
         artifact = session.get(Artifact, model.artifact_id) if model.artifact_id else None
         if (artifact is None or artifact.status != "ready" or not artifact.remote_file_id
                 or artifact.storage_provider != "google_drive" or len(artifact.sha256) != 64 or artifact.size_bytes <= 0):

@@ -9,6 +9,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from drowning.data.labels import CANONICAL_LABELS
+from drowning.inference.aggregation import TrackAggregator
 from drowning.inference.buffer import FrameCrop, TemporalWindowBuffer
 from drowning.inference.detector import PersonDetector
 from drowning.inference.tracking import Box, ByteTracker
@@ -40,7 +41,8 @@ class PersonStateInference:
             raise ValueError("Model cannot be used for temporal inference: " + "; ".join(errors))
         if not model_version:
             raise ValueError("model_version must be pinned for the inference job")
-        temporal_contract = manifest["temporal_contract"]
+        self.model_kind = manifest.get("model_kind", "temporal")
+        temporal_contract = manifest["temporal_contract"] if self.model_kind == "temporal" else None
         preprocessing = manifest["preprocessing"]
         configured_size = preprocessing["size"]
         if isinstance(configured_size, (list, tuple)):
@@ -48,7 +50,8 @@ class PersonStateInference:
                 raise ValueError("inference currently requires a square model input")
             configured_size = int(configured_size[0])
         contract_values = (sequence_length, sample_period_ms, max_track_gap_ms)
-        manifest_values = (temporal_contract["sequence_length"], temporal_contract["sample_period_ms"], temporal_contract["max_track_gap_ms"])
+        manifest_values = ((temporal_contract["sequence_length"], temporal_contract["sample_period_ms"], temporal_contract["max_track_gap_ms"])
+                           if temporal_contract else (None, None, None))
         if any(given is not None and given != expected for given, expected in zip(contract_values, manifest_values)):
             raise ValueError("inference sampling parameters must exactly match the pinned model bundle")
         if context_fraction is not None and context_fraction != preprocessing["context_fraction"]:
@@ -60,14 +63,20 @@ class PersonStateInference:
         self.detector = detector
         self.model_version = model_version
         self.device = device
-        self.sequence_length = int(temporal_contract["sequence_length"])
-        self.sample_period_ms = int(temporal_contract["sample_period_ms"])
-        self.max_track_gap_ms = int(temporal_contract["max_track_gap_ms"])
+        if temporal_contract:
+            self.sequence_length = int(temporal_contract["sequence_length"])
+            self.sample_period_ms = int(temporal_contract["sample_period_ms"])
+            self.max_track_gap_ms = int(temporal_contract["max_track_gap_ms"])
+        else:
+            self.sequence_length = self.sample_period_ms = self.max_track_gap_ms = None
         self.context_fraction = float(preprocessing["context_fraction"])
         self.input_size = int(configured_size)
         self.mean = preprocessing["mean"]
         self.std = preprocessing["std"]
-        self.buffer = TemporalWindowBuffer(self.sequence_length, self.sample_period_ms, self.max_track_gap_ms)
+        self.buffer = (TemporalWindowBuffer(self.sequence_length, self.sample_period_ms, self.max_track_gap_ms)
+                       if temporal_contract else None)
+        # image_tracked: the image head scores each frame, and the tracker ID aggregates a person's scores over time.
+        self.aggregator = TrackAggregator(manifest["aggregation"]) if self.model_kind == "image_tracked" else None
         self.tracker = tracker if tracker is not None else ByteTracker()
 
     @torch.inference_mode()
@@ -95,7 +104,10 @@ class PersonStateInference:
     def reset_stream(self) -> None:
         """Forget tracker and per-track history before an unrelated video or camera session."""
         self.tracker.reset()
-        self.buffer.reset()
+        if self.buffer is not None:
+            self.buffer.reset()
+        if self.aggregator is not None:
+            self.aggregator.reset()
 
     @torch.inference_mode()
     def process_frame(self, image: Image.Image, timestamp_ms: int, frame_index: int) -> list[dict[str, Any]]:
@@ -106,6 +118,20 @@ class PersonStateInference:
             crop = crop_person(image, (box.x1, box.y1, box.x2, box.y2),
                                context_fraction=self.context_fraction, output_size=self.input_size)
             tensor = image_to_tensor(crop, size=self.input_size, mean=self.mean, std=self.std)
+            if self.aggregator is not None:
+                frame_probs = torch.softmax(self.model.forward_images(tensor.unsqueeze(0).to(self.device))[0].float(), dim=-1)
+                state = self.aggregator.update(str(track_id), timestamp_ms, frame_probs.detach().cpu().tolist())
+                frame = self._prediction(frame_probs.log())
+                ready = state["track_ready"]
+                records.append({"frame_index": frame_index, "timestamp_ms": timestamp_ms, "track_id": track_id,
+                                "identity_verified": False, "bbox_xyxy": [box.x1, box.y1, box.x2, box.y2],
+                                "detector_confidence": box.confidence,
+                                "prediction_branch": "image_tracked" if ready else "image_frame", "temporal_available": False,
+                                "label": state["label"] if ready else frame["label"],
+                                "class_scores": state["smoothed_scores"] if ready else frame["class_scores"],
+                                "frame_label": frame["label"], "frame_class_scores": frame["class_scores"],
+                                "alert": state["alert"], "track_frames": state["track_frames"]})
+                continue
             window = self.buffer.push(FrameCrop(track_id, timestamp_ms, tensor, self.model_version))
             if window is not None:
                 frames = torch.stack([item.crop for item in window]).unsqueeze(0).to(self.device)
@@ -129,6 +155,8 @@ class PersonStateInference:
             x1, y1, x2, y2 = (int(value) for value in record["bbox_xyxy"])
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (101, 207, 184), 2)
             caption = f"{record['track_id']} | {record.get('label') or 'unknown'} | {record['prediction_branch']}"
+            if record.get("alert"):
+                caption += " | ALERT"
             cv2.putText(annotated, caption, (x1, max(18, y1 - 7)), cv2.FONT_HERSHEY_SIMPLEX,
                         0.48, (255, 255, 255), 2, cv2.LINE_AA)
         return annotated

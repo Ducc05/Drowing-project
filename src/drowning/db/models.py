@@ -116,6 +116,15 @@ class ModelVersion(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
 
+    @property
+    def model_kind(self) -> str | None:
+        """'temporal', 'image_tracked' (image encoder + per-track aggregation) or None when it is not inference-ready."""
+        if self.completion_kind != "candidate":
+            return None
+        if self.temporal_trained:
+            return "temporal"
+        return "image_tracked" if (self.metrics or {}).get("model_kind") == "image_tracked" else None
+
 
 class ModelRegistry(Base):
     __tablename__ = "model_registry"
