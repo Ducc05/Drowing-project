@@ -267,7 +267,17 @@ def _review_command(args: argparse.Namespace, source: dict) -> int:
     return 0
 
 
+def _utf8_console() -> None:
+    """Vietnamese output must not crash a cp1252/cp437 Windows console."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     args = build_parser().parse_args(argv)
     try:
         load_env_file(args.env_file)

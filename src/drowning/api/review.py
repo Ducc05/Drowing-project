@@ -14,7 +14,7 @@ from drowning.data.adapters import convert_to_jsonl
 from drowning.data.audit import audit_jsonl
 from drowning.data.quality import build_quality_report
 from drowning.data.registry import SourceConfigError, load_source, resolve_source_root, validate_source
-from drowning.data.review import (groups_fingerprint, load_grouping_review, mapping_fingerprint,
+from drowning.data.review import (groups_fingerprint, is_mapping_approved, load_grouping_review, mapping_fingerprint,
                                   record_grouping_review, record_mapping_review, review_status)
 from drowning.data.review_rules import (VERDICT_SCHEMA_VERSION, VerdictError, evaluate_ai_verdict, evaluate_auto_rules,
                                         load_policy, policy_version)
@@ -26,10 +26,11 @@ class ReviewConflict(RuntimeError):
 
 
 class SourceReviewService:
-    def __init__(self, sources_dir: Path, *, reviews_dir: Path, work_dir: Path):
+    def __init__(self, sources_dir: Path, *, reviews_dir: Path, work_dir: Path, policy_path: Path | None = None):
         self.sources_dir = sources_dir
         self.reviews_dir = reviews_dir
         self.work_dir = work_dir
+        self.policy_path = policy_path
         self._lock = threading.Lock()
         self._tasks: dict[str, dict[str, Any]] = {}
 
@@ -48,7 +49,7 @@ class SourceReviewService:
         groups8 = groups_fingerprint(grouping["by_path"])[:8] if grouping else "nogroups"
         base = self.work_dir / "review" / label / mapping8
         return {"canonical": self.work_dir / "derived" / f"{label}.{mapping8}.{groups8}.jsonl",
-                "sheets": base / "sheets", "quality": base / f"quality-{groups8}"}
+                "sheets": base / "sheets", "quality": base / "quality-nogroups"}
 
     # -- state -----------------------------------------------------------------------------
     def status(self, source_id: str) -> dict[str, Any]:
@@ -64,12 +65,27 @@ class SourceReviewService:
             "sheets": ([{k: sheet[k] for k in ("key", "kind", "original_label", "mapping_action", "canonical_label",
                                                "sample_count", "total_for_label")} for sheet in manifest["sheets"]]
                        if manifest else None),
-            "quality": report, "proposed_groups_available": (paths["quality"] / "proposed-groups.json").is_file(),
+            "quality": self._with_live_readiness(source, report), "proposed_groups_available": (paths["quality"] / "proposed-groups.json").is_file(),
             "group_sheets": ([{k: sheet[k] for k in ("key", "kind", "rows", "clusters_in_export")}
                               for sheet in json.loads((paths["quality"] / "group-sheets" / "groups.json").read_text(encoding="utf-8"))["sheets"]]
                              if (paths["quality"] / "group-sheets" / "groups.json").is_file() else None),
             "auto_rules": self.auto_rules(source_id) if report is not None and (paths["quality"] / "audit.json").is_file() else None,
         }
+
+    def _with_live_readiness(self, source: dict[str, Any], report: dict[str, Any] | None) -> dict[str, Any] | None:
+        if report is None:
+            return None
+        readiness = dict(report["image_training_readiness"])
+        mapping_ok = is_mapping_approved(source)
+        grouping_ok = load_grouping_review(source, self.reviews_dir) is not None or readiness["source_groups_verified"]
+        blockers = [b for b in readiness["blockers"] if b not in {"mapping_review_not_approved", "source_groups_not_verified"}]
+        if not mapping_ok:
+            blockers.append("mapping_review_not_approved")
+        if not grouping_ok:
+            blockers.append("source_groups_not_verified")
+        readiness.update(mapping_review_approved=mapping_ok, source_groups_verified=grouping_ok, blockers=blockers,
+                         ready_for_split_and_crop_building=mapping_ok and grouping_ok)
+        return {**report, "image_training_readiness": readiness}
 
     def sheet_file(self, source_id: str, key: str) -> Path:
         source = self.source(source_id)
@@ -108,7 +124,10 @@ class SourceReviewService:
     def _run(self, source: dict[str, Any], root: Path) -> None:
         source_id, paths = source["source_id"], self._paths(source)
         try:
-            if not paths["canonical"].is_file():
+            needed = [paths["sheets"] / "samples.json", paths["quality"] / "quality.json", paths["quality"] / "audit.json",
+                      paths["quality"] / "group-sheets" / "groups.json"]
+            has_proposal = (paths["quality"] / "proposed-groups.json").is_file()
+            if not paths["canonical"].is_file() and (not all(f.is_file() for f in needed[:3]) or not has_proposal):
                 self._set(source_id, step="converting annotations")
                 convert_to_jsonl(source, root, paths["canonical"])
             if not (paths["sheets"] / "samples.json").is_file():
@@ -169,13 +188,13 @@ class SourceReviewService:
         if not quality_file.is_file() or not audit_file.is_file():
             raise FileNotFoundError("quality/audit")
         return evaluate_auto_rules(source, json.loads(quality_file.read_text(encoding="utf-8")),
-                                   json.loads(audit_file.read_text(encoding="utf-8")), load_policy())
+                                   json.loads(audit_file.read_text(encoding="utf-8")), load_policy(self.policy_path))
 
     def evidence(self, source_id: str) -> dict[str, Any]:
         """Copy everything a reviewer must look at into one folder and fix its hash, so a verdict is tied to it."""
         source = self.source(source_id)
         paths = self._paths(source)
-        policy = load_policy()
+        policy = load_policy(self.policy_path)
         rules = self.auto_rules(source_id)
         files: dict[str, Path] = {"quality.json": paths["quality"] / "quality.json"}
         for sheet in json.loads((paths["sheets"] / "samples.json").read_text(encoding="utf-8"))["sheets"]:
@@ -269,7 +288,7 @@ Set `reviewer.name` to your model name/version, `viewed_images` to true only if 
 
     def submit_verdict(self, source_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
         source = self.source(source_id)
-        policy = load_policy()
+        policy = load_policy(self.policy_path)
         current = self.evidence(source_id)
         try:
             judged = evaluate_ai_verdict(verdict, source=source, evidence_sha256=current["evidence_sha256"], policy=policy,

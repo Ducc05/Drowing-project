@@ -20,6 +20,7 @@ from drowning.api.review import SourceReviewService
 from drowning.config import Settings
 from drowning.data.registry import load_source
 from drowning.data.review import is_mapping_approved, load_grouping_review, mapping_fingerprint
+from drowning.data.review_rules import gating_mode
 from drowning.db.models import ExecutionSlot, Job, ModelRegistry, ModelVersion
 from drowning.db.repositories import create_job, transition_job
 from drowning.domain.jobs import JobState
@@ -39,10 +40,11 @@ class TrainBlocked(RuntimeError):
 class TrainService:
     def __init__(self, session_factory: sessionmaker, settings: Settings, *, project_root: Path,
                  reviews: SourceReviewService, which: Callable[[str], str | None] | None = None,
-                 home: Path | None = None, environ: dict[str, str] | None = None):
+                 home: Path | None = None, environ: dict[str, str] | None = None, policy_path: Path | None = None):
         self.factory, self.settings, self.project_root, self.reviews = session_factory, settings, project_root, reviews
         self.which, self.home = which or (lambda _name: find_kaggle()), home or Path.home()
         self.environ = os.environ if environ is None else environ
+        self.policy_path = policy_path or (project_root / "configs" / "review_policy.yaml")
 
     # -- environment -----------------------------------------------------------------------
     def _environment(self) -> dict[str, Any]:
@@ -111,8 +113,12 @@ class TrainService:
                 seen = prepared_sources.get(row["source_id"])
                 if seen is None or seen.get("status") != "prepared" or seen.get("mapping_hash") != row["mapping_hash"]:
                     stale.append(row["source_id"])
-        approvals_missing = [f"{r['source_id']}: " + ("mapping not approved" if not r["mapping_approved"] else "source groups not verified")
-                             for r in sources if not (r["mapping_approved"] and r["groups_verified"])]
+        advisory = gating_mode(self.policy_path) == "advisory"
+        unconfirmed = [f"{r['source_id']}: " + ("mapping not confirmed" if not r["mapping_approved"] else "source groups not confirmed")
+                       for r in sources if not (r["mapping_approved"] and r["groups_verified"])]
+        approvals_missing = [] if advisory else [
+            f"{r['source_id']}: " + ("mapping not approved" if not r["mapping_approved"] else "source groups not verified")
+            for r in sources if not (r["mapping_approved"] and r["groups_verified"])]
         base = []
         if not environment["kaggle_cli_installed"]:
             base.append("Kaggle CLI is not installed (pip install kaggle)")
@@ -138,13 +144,16 @@ class TrainService:
         elif not (smoke.payload["run_summary"].get("gpu_confirmed") and smoke.payload["run_summary"].get("gradients_ok")):
             train_block.append("the last remote_smoke did not confirm a GPU with gradients")
         windows = (prepare_summary or {}).get("temporal_window_count_before_split", 0)
-        if prepare_summary and windows == 0:
-            train_block.append("no temporal windows: a labeled video source with person/time annotations is required")
+        # The temporal branch needs labeled video; the image-only branch trains on image crops and aggregates by tracker ID at inference.
+        branch_blocked = {"temporal": (["no temporal windows: a labeled video source with person/time annotations is required"]
+                                       if prepare_summary and windows == 0 else []),
+                          "image_only": []}
         if not environment["drive_folder_configured"] or not environment["drive_token_file_present"]:
             train_block.append("Google Drive must be configured to publish a candidate")
         if approved is not None:
             train_block.append("an approved model already exists; training a new one needs an explicit new version")
-        modes["train_candidate"] = {"blocked_by": train_block, "requires_new_version_flag": True}
+        modes["train_candidate"] = {"blocked_by": train_block, "requires_new_version_flag": True,
+                                    "branch_blocked_by": branch_blocked}
         for entry in modes.values():
             effective = [b for b in entry["blocked_by"] if not b.startswith("an approved model already exists")]
             entry["allowed"] = not effective
@@ -158,6 +167,8 @@ class TrainService:
                                       "mode": (active.payload or {}).get("mode") or (active.payload or {}).get("modality"),
                                       "state": active.state} if active else None),
             "queued_kaggle_jobs": len(queued), "modes": modes,
+            "review_mode": "advisory" if advisory else "enforced",
+            "unconfirmed_sources": unconfirmed if advisory else [],
             "temporal_window_count_before_split": windows}
 
     # -- submission ------------------------------------------------------------------------
@@ -226,6 +237,11 @@ class TrainService:
         blocked = [reason_ for reason_ in view["modes"][mode]["blocked_by"]
                    if not (mode == "train_candidate" and new_version and reason_.startswith("an approved model already exists"))]
         if mode == "train_candidate":
+            try:
+                chosen = self._notebook_builder().normalize_options(options)
+            except (ValueError, KeyError) as exc:
+                raise TrainBlocked([f"invalid training options: {exc}"]) from exc
+            blocked += view["modes"]["train_candidate"]["branch_blocked_by"][chosen["branch"]]
             if not new_version:
                 blocked.append("train_candidate must be requested as an explicit new version")
             if len(reason.strip()) < 10:
@@ -248,7 +264,8 @@ class TrainService:
         summary = (view["latest_prepare"] or {}).get("summary") or {}
         if mode == "train_candidate":
             payload.update(dataset_fingerprint=self._dataset_fingerprint(summary), preflight={
-                "ready": True, "mapping_review_approved": True,
+                "ready": True, "review_mode": view["review_mode"],
+                "mapping_review_approved": all(s["mapping_approved"] for s in view["sources"]),
                 "source_video_disjointness_verified": all(s["groups_verified"] for s in view["sources"]),
                 "temporal_window_count": view["temporal_window_count_before_split"]})
             payload["training_identity"] = self._training_identity(payload, view)

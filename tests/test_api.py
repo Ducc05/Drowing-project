@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,8 +29,13 @@ def api_request(app, method: str, path: str, **kwargs):
 class ApiTests(unittest.TestCase):
     def test_health_and_config_status_work_without_database_and_do_not_expose_secrets(self):
         settings = Settings.from_env({})
-        app = create_app(settings=settings, config_dir=ROOT / "configs" / "datasets",
-                         env_file=ROOT / "missing.env")
+        # A copy of the descriptor in a scratch project: real approvals under ROOT/reviews must not leak into this test.
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        config_dir = Path(scratch.name) / "configs" / "datasets"
+        config_dir.mkdir(parents=True)
+        shutil.copy(ROOT / "configs" / "datasets" / "alanoud_swimming_drowning_v4.yaml", config_dir)
+        app = create_app(settings=settings, config_dir=config_dir, env_file=ROOT / "missing.env")
         self.assertEqual(api_request(app, "GET", "/health").status_code, 200)
         readiness = api_request(app, "GET", "/ready")
         self.assertEqual(readiness.status_code, 503)

@@ -33,9 +33,9 @@ def get_approved_model(session: Session, settings: Settings, *, pinned_model_id:
         allowed = {"approved", "superseded"} | ({"candidate"} if allow_candidate else set())
         if model_record is None or model_record.status not in allowed:
             raise InferenceUnavailable("Pinned job model version is unavailable")
-    if (not model_record.temporal_trained or model_record.completion_kind != "candidate"
+    if (model_record.model_kind is None
             or model_record.artifact_id is None or model_record.model_family != settings.model_family):
-        raise InferenceUnavailable("Approved model is not a verified temporal candidate")
+        raise InferenceUnavailable("Approved model is not a verified temporal or image_tracked candidate")
     artifact = session.get(Artifact, model_record.artifact_id)
     if artifact is None or artifact.status != "ready" or not artifact.remote_file_id:
         raise InferenceUnavailable("Approved model has no ready Drive artifact")

@@ -58,7 +58,12 @@ class TrainServiceTests(unittest.TestCase):
         self.engine.dispose()
         self.temp.cleanup()
 
-    def service(self, env=None, *, configured=True, cli=True, credentials=True, drive=True):
+    def policy(self, mode):
+        path = self.base / f"policy-{mode}.yaml"
+        path.write_text(yaml.safe_dump({"version": 1, "gating": {"mode": mode}}), encoding="utf-8")
+        return path
+
+    def service(self, env=None, *, configured=True, cli=True, credentials=True, drive=True, mode="enforced"):
         values = {**ENV, "KAGGLE_KERNEL_DIR": str(self.base / "kernels"), "GOOGLE_OAUTH_TOKEN_FILE": str(self.token)}
         if not configured:
             values = {k: v for k, v in values.items() if not k.startswith("KAGGLE_KERNEL_REF") and k != "KAGGLE_DATASET_SOURCES"}
@@ -67,7 +72,8 @@ class TrainServiceTests(unittest.TestCase):
         values.update(env or {})
         return TrainService(self.factory, Settings.from_env(values), project_root=ROOT, reviews=self.reviews,
                             which=(lambda name: "kaggle" if cli else None), home=self.base / "home",
-                            environ={"KAGGLE_USERNAME": "u", "KAGGLE_KEY": "k"} if credentials else {})
+                            environ={"KAGGLE_USERNAME": "u", "KAGGLE_KEY": "k"} if credentials else {},
+                            policy_path=self.policy(mode))
 
     def approve_everything(self):
         source = load_source(self.sources / "alanoud_swimming_drowning_v4.yaml", self.reviews_dir)
@@ -122,6 +128,33 @@ class TrainServiceTests(unittest.TestCase):
         view = service.preflight()
         self.assertEqual(view["stale_sources"], [])
         self.assertTrue(view["modes"]["remote_smoke"]["allowed"], view["modes"]["remote_smoke"])
+
+    def test_advisory_review_never_blocks_smoke_or_train_and_says_what_is_unconfirmed(self):
+        service = self.service(mode="advisory")
+        self.completed_prepare(windows=6)          # nothing was approved or verified
+        self.completed_smoke()
+        view = service.preflight()
+        self.assertEqual(view["review_mode"], "advisory")
+        self.assertTrue(view["modes"]["remote_smoke"]["allowed"], view["modes"]["remote_smoke"])
+        self.assertTrue(view["modes"]["train_candidate"]["allowed"], view["modes"]["train_candidate"])
+        self.assertTrue(any("not confirmed" in text for text in view["unconfirmed_sources"]))
+        result = service.submit("train_candidate", new_version=True, reason="Advisory review, nobody confirmed yet",
+                                idempotency_key="train-advisory-1")
+        self.assertEqual(result["status"], "queued")
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(result["job"]["id"]))
+        self.assertEqual(job.payload["preflight"]["review_mode"], "advisory")
+        self.assertFalse(job.payload["preflight"]["mapping_review_approved"])
+        dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
+        self.assertEqual(dispatcher._validate_job(job, Path(job.payload["kernel_dir"])), "owner/drowning-temporal")
+
+    def test_enforced_mode_still_requires_review_when_asked(self):
+        service = self.service(mode="enforced")
+        self.completed_prepare(windows=6)
+        self.completed_smoke()
+        view = service.preflight()
+        self.assertFalse(view["modes"]["train_candidate"]["allowed"])
+        self.assertIn("mapping not approved", " ".join(view["modes"]["train_candidate"]["blocked_by"]))
 
     def test_changed_mapping_makes_the_last_prepare_stale(self):
         service = self.service()
@@ -181,7 +214,8 @@ class TrainServiceTests(unittest.TestCase):
         self.approve_everything()
         smoke_id = self.completed_smoke(gpu=False)
         with self.assertRaises(TrainBlocked) as caught:
-            service.submit("train_candidate", new_version=True, reason="first candidate", idempotency_key="train-request-1")
+            service.submit("train_candidate", new_version=True, reason="first candidate", idempotency_key="train-request-1",
+                           options={"branch": "temporal"})
         reasons = " ".join(caught.exception.reasons)
         for text in ("did not confirm a GPU", "no temporal windows"):
             self.assertIn(text, reasons)
@@ -200,6 +234,24 @@ class TrainServiceTests(unittest.TestCase):
             job = session.get(Job, UUID_FROM(result["job"]["id"]))
         self.assertEqual(job.payload["preflight"]["temporal_window_count"], 6)
         self.assertEqual(len(job.payload["dataset_fingerprint"]), 64)
+        dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
+        self.assertEqual(dispatcher._validate_job(job, Path(job.payload["kernel_dir"])), "owner/drowning-temporal")
+
+    def test_image_mode_is_the_default_and_needs_no_temporal_windows_but_passes_the_dispatcher_gate(self):
+        service = self.service()
+        self.completed_prepare(windows=0)
+        self.approve_everything()
+        self.completed_smoke()
+        with self.assertRaises(TrainBlocked) as caught:
+            service.submit("train_candidate", new_version=True, reason="temporal on image-only data", idempotency_key="train-temporal-1",
+                           options={"branch": "temporal"})
+        self.assertIn("no temporal windows", " ".join(caught.exception.reasons))
+        result = service.submit("train_candidate", new_version=True, reason="Image mode on the labeled image data",
+                                idempotency_key="train-image-1")
+        self.assertEqual(result["status"], "queued")
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(result["job"]["id"]))
+        self.assertEqual((job.payload["options"]["branch"], job.payload["preflight"]["temporal_window_count"]), ("image_only", 0))
         dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
         self.assertEqual(dispatcher._validate_job(job, Path(job.payload["kernel_dir"])), "owner/drowning-temporal")
 

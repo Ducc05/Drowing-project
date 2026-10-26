@@ -65,6 +65,10 @@ class TrainSubmitRequest(BaseModel):
     pretrained: bool = False
     image_epochs: int = Field(default=5, ge=1, le=50)
     temporal_epochs: int = Field(default=5, ge=1, le=50)
+    video_epochs: int = Field(default=3, ge=1, le=50)
+    frame_stride_ms: int = Field(default=500, ge=100, le=5000)
+    max_frames_per_video: int = Field(default=300, ge=10, le=5000)
+    branch: Literal["temporal", "image_only"] = "image_only"
 
 
 class ReviewMarkRequest(BaseModel):
@@ -389,7 +393,9 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     def train_submit(body: TrainSubmitRequest, service: TrainService = Depends(get_train)):
         return train_call(lambda: service.submit(
             body.mode, new_version=body.new_version, reason=body.reason, idempotency_key=body.idempotency_key,
-            options={"pretrained": body.pretrained, "image_epochs": body.image_epochs, "temporal_epochs": body.temporal_epochs}))
+            options={"pretrained": body.pretrained, "image_epochs": body.image_epochs, "temporal_epochs": body.temporal_epochs,
+                     "branch": body.branch, "video_epochs": body.video_epochs, "frame_stride_ms": body.frame_stride_ms,
+                     "max_frames_per_video": body.max_frames_per_video}))
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
     def cancel_job(job_id: UUID, service: TrainService = Depends(get_train)):
@@ -534,7 +540,7 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         cache = Path(request.app.state.settings.approved_model_bundle_dir).expanduser() if request.app.state.settings.approved_model_bundle_dir else None
         return {"models": [{"id": str(model.id), "model_family": model.model_family,
                             "display_version": model.display_version, "status": model.status,
-                            "temporal_trained": model.temporal_trained, "completion_kind": model.completion_kind,
+                            "temporal_trained": model.temporal_trained, "model_kind": model.model_kind, "completion_kind": model.completion_kind,
                             "dataset_fingerprint": model.dataset_fingerprint, "metrics": model.metrics or {},
                             "checkpoint": checkpoint_info(session, model),
                             "cached_locally": bool(cache and (cache / str(model.id) / "manifest.json").is_file()),

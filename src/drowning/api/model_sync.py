@@ -41,8 +41,8 @@ def sync_model_version(session: Session, settings, drive, model_version_id: UUID
 
 
 def _sync_model(session: Session, settings, drive, model: ModelVersion) -> dict:
-    if not model.temporal_trained or model.completion_kind != "candidate" or model.model_family != settings.model_family:
-        raise InferenceUnavailable("Only a completed temporal candidate of the active model family can be synchronized")
+    if model.model_kind is None or model.model_family != settings.model_family:
+        raise InferenceUnavailable("Only a completed candidate of the active model family can be synchronized")
     artifact = session.get(Artifact, model.artifact_id) if model.artifact_id else None
     if (artifact is None or artifact.status != "ready" or artifact.storage_provider != "google_drive"
             or not artifact.remote_file_id or len(artifact.sha256) != 64 or artifact.size_bytes <= 0):
