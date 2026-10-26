@@ -3,6 +3,13 @@
 # Đổi ngưỡng ở đây sẽ đổi phiên bản chính sách (rules_version) ghi trong mỗi bản duyệt.
 version: 1
 
+# Duyệt chỉ là bước XÁC NHẬN, không phải cổng chặn (quyết định của người dùng 2026-10-26).
+#   advisory: chưa duyệt vẫn đi tiếp (smoke, train). Kết quả quy tắc/duyệt được ghi lại và hiển thị; nguồn chưa duyệt
+#             được đánh dấu "chưa xác nhận" trong báo cáo và model. Ảnh chưa có nhóm được gom tự động bằng so khớp ảnh.
+#   enforced: phải duyệt (ánh xạ + nhóm) mới được đi tiếp.
+gating:
+  mode: advisory
+
 delegation:
   allow_ai_approval: true          # AI được duyệt thay người dùng (người dùng đã ủy quyền)
   delegated_by: user

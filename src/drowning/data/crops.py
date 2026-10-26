@@ -223,3 +223,151 @@ def build_crops(source: dict[str, Any], canonical_jsonl: Path, raw_root: Path, o
         "split_assigned_count": sum(1 for obs in observations if obs.get("media_id") in splits),
         "preview_only": preview_only, "mapping_approved": approved,
     }
+
+
+def select_video_frames(observations: list[dict[str, Any]], *, stride_ms: int, max_per_video: int) -> list[dict[str, Any]]:
+    """Choose which annotated video frames become still-image samples.
+
+    Adjacent frames of one person are nearly identical, so a sample is kept per person track every ``stride_ms``.
+    The first frame and every frame where the person's label changes are always kept (state changes are the rare,
+    informative moments). A video above ``max_per_video`` is thinned evenly, change frames first, so one long video
+    cannot dominate training. Frames never leave their video, so the group split still keeps them in one split.
+    """
+    if stride_ms <= 0 or max_per_video <= 0:
+        raise ValueError("stride_ms and max_per_video must be positive")
+    tracks: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for observation in observations:
+        if isinstance(observation.get("frame_index"), int) and not isinstance(observation.get("frame_index"), bool):
+            tracks[(observation["media_id"], str(observation.get("person_id")))].append(observation)
+
+    def clock(observation: dict[str, Any]) -> float:
+        value = observation.get("timestamp_ms")
+        return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else observation["frame_index"] * 40.0
+
+    kept_by_media: dict[str, list[tuple[bool, dict[str, Any]]]] = defaultdict(list)
+    for (media_id, _person), items in sorted(tracks.items()):
+        items.sort(key=lambda item: (item["frame_index"], item.get("observation_id", "")))
+        last_label, last_time = None, None
+        for item in items:
+            changed = last_label is not None and item.get("canonical_label") != last_label
+            if last_time is None or changed or clock(item) - last_time >= stride_ms:
+                kept_by_media[media_id].append((changed, item))
+                last_time = clock(item)
+            last_label = item.get("canonical_label")
+    selected: list[dict[str, Any]] = []
+    for media_id in sorted(kept_by_media):
+        entries = kept_by_media[media_id]
+        if len(entries) > max_per_video:
+            changes = [entry for entry in entries if entry[0]][:max_per_video]
+            rest = [entry for entry in entries if not entry[0]]
+            room = max_per_video - len(changes)
+            step = len(rest) / room if room else 0
+            picked = [rest[int(i * step)] for i in range(room)] if room else []
+            entries = sorted(changes + picked, key=lambda entry: (entry[1]["frame_index"], entry[1].get("observation_id", "")))
+        selected.extend(item for _changed, item in entries)
+    return selected
+
+
+def build_video_frame_crops(source: dict[str, Any], canonical_jsonl: Path, raw_root: Path, output_dir: Path,
+                            *, split_manifest: Path, stride_ms: int = 500, max_per_video: int = 300,
+                            context_fraction: float = 0.15, size: int = 224) -> dict[str, Any]:
+    """Cut reviewed video annotations into still person crops, with the same eligibility rules as image crops."""
+    import cv2
+
+    errors = validate_source(source)
+    if errors:
+        raise SourceConfigError("Invalid source descriptor: " + "; ".join(errors))
+    review = source.get("mapping_review", {})
+    if not (isinstance(review, dict) and review.get("status") == "approved" and not review.get("sample_review_required", True)):
+        raise SourceConfigError("Source mapping is not approved; video frames cannot become training samples")
+    _protected_output(output_dir, raw_root)
+    splits: dict[str, str] = {}
+    split_groups: dict[str, str] = {}
+    for line in split_manifest.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            item = json.loads(line)
+            splits[item["media_id"]] = item["split"]
+            if item.get("global_group_id"):
+                split_groups[item["media_id"]] = str(item["global_group_id"])
+    media: dict[str, dict[str, Any]] = {}
+    observations: list[dict[str, Any]] = []
+    for line in canonical_jsonl.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if record.get("entity") == "media" and record.get("modality") == "video":
+            media[record["media_id"]] = record
+        elif record.get("entity") == "observation" and record.get("mapping_action") == "map":
+            observations.append(record)
+    for media_id, media_record in media.items():
+        group = media_record.get("global_group_id")
+        if (media_id not in splits or media_record.get("grouping_status") != "verified" or not group
+                or split_groups.get(media_id) != group):
+            raise SourceConfigError(f"Video {media_id} has no matching verified global source group")
+    chosen = select_video_frames([o for o in observations if o.get("media_id") in media and o.get("annotation_status") == "reviewed"
+                                  and o.get("canonical_label")], stride_ms=stride_ms, max_per_video=max_per_video)
+    by_media: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for observation in chosen:
+        by_media[observation["media_id"]].append(observation)
+
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
+    written, skipped = 0, []
+    try:
+        with (temp_dir / "crop_manifest.jsonl").open("x", encoding="utf-8", newline="\n") as manifest_stream:
+            for media_id in sorted(by_media):
+                media_record = media[media_id]
+                wanted = {o["frame_index"]: [] for o in by_media[media_id]}
+                for observation in by_media[media_id]:
+                    wanted[observation["frame_index"]].append(observation)
+                capture = cv2.VideoCapture(str(_safe_file(raw_root, Path(media_record["raw_relative_path"]))))
+                if not capture.isOpened():
+                    capture.release()
+                    skipped.append({"observation_id": media_id, "reason": "video could not be opened"})
+                    continue
+                try:
+                    last_needed = max(wanted)
+                    for frame_index in range(last_needed + 1):
+                        if frame_index not in wanted:
+                            if not capture.grab():
+                                break
+                            continue
+                        ok, bgr = capture.read()
+                        if not ok:
+                            break
+                        image = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+                        for observation in wanted[frame_index]:
+                            x1, y1, x2, y2 = (float(v) for v in observation["bbox"])
+                            box = [max(0.0, x1), max(0.0, y1), min(float(image.width), x2), min(float(image.height), y2)]
+                            try:
+                                crop = _crop_pil(image, box, context_fraction, size)
+                            except (ValueError, TypeError) as exc:
+                                skipped.append({"observation_id": observation.get("observation_id", ""), "reason": str(exc)})
+                                continue
+                            label = observation["canonical_label"]
+                            relative = Path("frames") / label / f"{observation['observation_id']}.jpg"
+                            target = temp_dir / relative
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            crop.save(target, format="JPEG", quality=92, optimize=True)
+                            manifest_stream.write(json.dumps({
+                                "schema_version": 1, "crop_id": observation["observation_id"], "media_id": media_id,
+                                "observation_id": observation["observation_id"], "source_id": media_record["source_id"],
+                                "source_version": media_record["source_version"], "origin": "video_frame",
+                                "frame_index": frame_index, "timestamp_ms": observation.get("timestamp_ms"),
+                                "person_id": observation.get("person_id"), "split": splits[media_id],
+                                "crop_relative_path": relative.as_posix(), "crop_sha256": _sha256_file(target),
+                                "bbox_xyxy": box, "context_fraction": context_fraction, "output_size": [size, size],
+                                "canonical_label": label, "training_eligible": True, "review_required": False,
+                            }, ensure_ascii=False, sort_keys=True) + "\n")
+                            written += 1
+                finally:
+                    capture.release()
+        (temp_dir / "summary.json").write_text(json.dumps({
+            "source_id": source["source_id"], "origin": "video_frame", "stride_ms": stride_ms, "max_per_video": max_per_video,
+            "videos": len(by_media), "crop_count": written, "skipped_count": len(skipped), "skipped_samples": skipped[:50],
+            "raw_source_modified": False}, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_dir.rename(output_dir.resolve())
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+    return {"output_dir": str(output_dir.resolve()), "crop_count": written, "videos": len(by_media), "skipped_count": len(skipped)}

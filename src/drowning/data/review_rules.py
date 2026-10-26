@@ -34,6 +34,15 @@ def load_policy(path: Path | None = None) -> dict[str, Any]:
     return policy
 
 
+def gating_mode(path: Path | None = None) -> str:
+    """``advisory`` when the policy file says so; ``enforced`` otherwise (also when no policy file exists)."""
+    try:
+        policy = yaml.safe_load((path or POLICY_PATH).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return "enforced"
+    return "advisory" if (policy.get("gating") or {}).get("mode") == "advisory" else "enforced"
+
+
 def policy_version(policy: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(policy, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 

@@ -105,6 +105,21 @@ def is_mapping_approved(source: dict[str, Any]) -> bool:
     return isinstance(review, dict) and review.get("status") == "approved" and not review.get("sample_review_required", True)
 
 
+def advisory_mapping_review() -> dict[str, Any]:
+    """Stand-in used when review is advisory and nobody has confirmed the mapping: it lets the source be used
+    while recording, everywhere it is read, that no one confirmed it."""
+    return {"status": "approved", "sample_review_required": False, "reviewer": "policy:advisory_unconfirmed",
+            "source": "advisory_policy", "confirmed_by_a_reviewer": False}
+
+
+def mapping_review(source: dict[str, Any]) -> str:
+    """``confirmed`` (a reviewer approved it), ``unconfirmed`` (used under the advisory policy) or ``pending``."""
+    review = source.get("mapping_review", {})
+    if not is_mapping_approved(source):
+        return "pending"
+    return "unconfirmed" if review.get("confirmed_by_a_reviewer") is False else "confirmed"
+
+
 def mapping_review_requirements(source: dict[str, Any]) -> list[dict[str, Any]]:
     """What must be confirmed before approval: one entry per source label with a ``map`` action."""
     requirements = []
