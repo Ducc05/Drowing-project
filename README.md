@@ -48,7 +48,7 @@ Open the address printed by Vite (default `http://127.0.0.1:5173`). The Vite dev
 
 Job creation stores an idempotent database record only. It reports `dispatch: not_started` while no worker dispatcher is configured; the UI does not imply that a Kaggle run started.
 
-On this workstation the dedicated local PostgreSQL container is already provisioned on loopback port 55439, and `.env` contains its development and isolated test database URLs. Restart it with `docker start drowning-local-pg-20261026`; stop it with `docker stop drowning-local-pg-20261026` (data volume retained). For a new environment with blank DB URLs, `python scripts/provision_local_postgres.py` creates only its owned container/volume using an already available `postgres:17` image. It preserves existing DB configuration.
+On this workstation the dedicated local PostgreSQL container is already provisioned on loopback port 55439, and `.env` contains its development and isolated test database URLs. Restart it with `docker start drowning-local-pg-20261026`; stop it with `docker stop drowning-local-pg-20261026` (data volume retained).
 
 The image/video form requires an approved registry model, its verified local cache and explicitly supplied detector weights. Review the candidate, then click **Đồng bộ model đã duyệt** or run:
 
@@ -110,13 +110,6 @@ The local `.env` points `ALANOUD_V4_DATA_ROOT` at the read-only export found at 
 
 Run local contract tests with `python -m unittest discover -s tests -v`.
 
-Generate per-test evidence and repeat the main-flow review against the dedicated local DB:
-
-```powershell
-.\.venv\Scripts\python scripts/run_regression.py
-.\.venv\Scripts\python scripts/review_main_flows.py
-```
-
-The review runner builds/lints UI, compiles Python/notebook, checks real TCP HTTP and PostgreSQL, scans the raw source read-only, and records temporal/split blockers. It creates one clearly marked prepare review job, verifies idempotency, cancels that never-dispatched job and retains its events. It starts/stops its own temporary loopback API. It does not contact Drive/Kaggle or train. PostgreSQL tests use disposable run-specific schemas only in the configured `*_test` database. The HTML report includes exact limits and all observed test outcomes.
+The one-off helper scripts (regression runner, main-flow review, local PostgreSQL provisioning, initial-migration generator) are not versioned; they live in the git-ignored `tmp/scripts/` folder on the maintainer's machine.
 
 Build the private Kaggle notebook locally with `python notebooks/build_notebook.py`. It defaults to `prepare_only`; use `--mode remote_smoke` or `--mode train_candidate` to explicitly build another mode. Candidate training requires approved image crops plus reviewed causal video windows and a verified split manifest. Review `notebooks/kernel-metadata.template.json` and fill the Kaggle owner/input references only when those are known. The notebook has not been submitted to Kaggle.
