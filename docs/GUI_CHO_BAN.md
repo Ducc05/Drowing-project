@@ -1,91 +1,107 @@
-# Việc cần gửi cho bạn của bạn (làm SAU khi hệ thống của bạn chạy ổn)
+# Việc của riêng bạn trước khi gửi cho bạn của bạn
 
-Chưa cần làm gì trong file này cho đến khi bạn tự thấy hệ thống chạy ổn.
+Tài liệu cho **bạn (chủ dự án)**. Bạn của bạn đọc `docs/HUONG_DAN_BAN.md` (cài đặt, điền `.env`, cách dùng từng trang). File này liệt kê bạn phải làm và gửi gì.
 
-## Khi nào nên gửi (điều kiện)
+## Tóm tắt: dùng chung gì, riêng gì
 
-Gửi khi **cả bốn** mục sau đúng:
-- [ ] `drownctl doctor --online` không còn dòng `[THIẾU]`
-- [ ] Bạn đã chạy `prepare_only` ít nhất một lần trên Kaggle và xem báo cáo
-- [ ] Bạn đã duyệt ánh xạ nhãn của Alanoud (hoặc quyết định chưa dùng nó)
-- [ ] Bạn thấy trang Dữ liệu, Train, Đánh giá, Camera mở được và không lỗi
+Theo kế hoạch của bạn, bạn của bạn dùng **giống bạn** mọi thứ, trừ tài khoản Kaggle:
 
-## Phần 1. Thứ bạn gửi cho bạn
-
-| Gửi gì | Cách gửi | Ghi chú |
+| Thứ | Dùng chung hay riêng | Ghi chú |
 |---|---|---|
-| Mã nguồn dự án | **Git repo PRIVATE** (mục "Đưa lên git" bên dưới), hoặc zip | Nếu dùng zip, tạo bằng lệnh bên dưới. **Không** kèm `.env`, `secrets`, `.venv`, `node_modules`, `local-cache` |
-| Thư mục `reviews\` | nằm trong zip | Bản duyệt nhãn/nhóm của bạn, để bạn của bạn thấy cùng trạng thái duyệt |
-| `DATABASE_URL_UNPOOLED` của Neon | **kênh riêng** (tin nhắn riêng, không đăng nhóm) | Chứa mật khẩu. Họ điền vào `.env` của họ |
-| Quyền Editor vào thư mục Drive `DrowningProject` | Drive → Share | Họ dùng chung checkpoint và báo cáo |
-| Email Gmail của họ thêm vào Test users | Google Cloud Console của bạn | Nếu không, họ gặp lỗi 403 `access_denied` như bạn đã gặp |
-| File detector `yolo11n.pt` (nếu họ chạy thử video/camera) | cùng cách với zip | Hoặc họ tự tải |
+| Mã nguồn, cấu hình, bản duyệt `reviews\` | chung (qua git) | |
+| PostgreSQL Neon | **chung** | họ cần chuỗi kết nối |
+| Thư mục Google Drive | **chung** | chia sẻ thư mục cho Gmail của họ |
+| Ứng dụng Google (OAuth client) | **chung** | gửi file `google-oauth-client.json` |
+| Đăng nhập Google Drive (token) | **riêng**, mỗi người một token | xem lý do bên dưới |
+| Dataset Kaggle `vuduc792005/alanoud-pool` | **chung** | chia sẻ dataset cho tài khoản Kaggle của họ |
+| Tài khoản Kaggle, token Kaggle, notebook, hạn mức GPU | **riêng** | họ đổi `KAGGLE_KERNEL_REF` thành tên của họ |
+| Detector `yolo11n.pt` | tự tải | `drownctl detector fetch` |
 
-**Tuyệt đối không gửi:** file `.env`, `secrets\google-token.json`, `secrets\google-oauth-client.json`, `~\.kaggle\access_token`, `.env.bak`, `.env.pre-neon.bak`. Đó là thông tin đăng nhập của riêng bạn.
+### Vì sao không dùng chung "nick" Google Drive (không gửi `google-token.json`)
 
-## Đưa lên git (khuyến nghị: repo PRIVATE)
+Token Drive của hệ thống có quyền `drive` đầy đủ, nghĩa là cầm token là đọc/sửa/xóa được **toàn bộ Drive của bạn**, không chỉ thư mục dự án. Cách đúng là chia sẻ **thư mục** cho Gmail của họ (Editor) và để họ tự đăng nhập bằng Gmail của họ. Họ vẫn thấy cùng checkpoint và báo cáo. Nếu bạn vẫn muốn gửi token, hãy coi như đưa mật khẩu Drive của bạn.
 
-Trong repo có tên tài khoản Kaggle, ID project Neon và đường dẫn máy bạn. Đó không phải mật khẩu nhưng bạn nên để repo **private** và chỉ mời đúng bạn của bạn.
+## Bước 0. Mã nguồn trên git (đã làm cho bạn)
 
+Cấu trúc git đã được sửa: **thư mục gốc của repo là `D:\AI\DrowningProject`** (không còn là `D:\AI`). Remote: `https://github.com/Ducc05/Drowing-project.git`, nhánh `master`. `.gitignore` nằm ở gốc mới và đã gộp từ hai file cũ.
+
+- Repo cũ ở `D:\AI` được sao lưu nguyên vẹn trong `D:\AI\_git-backup-old-root\` (thư mục `dot-git` và `root.gitignore`). Xóa được khi bạn chắc chắn không cần.
+- `codex-cli-handoff` (tài liệu đặc tả) **không còn nằm trong repo**, vì nó ở ngoài thư mục dự án. Nó vẫn nằm trên máy bạn tại `D:\AI\codex-cli-handoff`. Bạn của bạn không cần nó để chạy hệ thống.
+- Không file bí mật nào được theo dõi: `.env`, `.env.*` (trừ `.env.example`), `secrets\`, `.neon`, `*.pt`, `*.mp4`, `*.zip`, `local-cache\`, thư mục job Kaggle đều bị `.gitignore` chặn.
+
+Mỗi lần sau muốn đẩy thêm:
 ```powershell
 cd D:\AI\DrowningProject
-git init
-git add .
-git status          # đọc kỹ danh sách file TRƯỚC khi commit
+git status                  # đọc kỹ cả "Untracked" lẫn "Changed"
+git add -A
+git commit -m "mô tả thay đổi"
+git push
 ```
-Danh sách phải **không** có: `.env`, `.env.bak`, `.env.pre-neon.bak`, `secrets/`, `local-cache/`, `.venv/`, `node_modules/`, file `.pt`. (`.env.example` thì được.) Nếu thấy một file bí mật trong danh sách thì dừng lại và báo mình, đừng commit.
+**Không được thấy** trong danh sách: `.env`, `.env.bak`, `.env.pre-neon.bak`, `secrets/`, `local-cache/`, `.venv/`, `node_modules/`, file `.pt`. Thấy thì dừng, không commit. Nếu lỡ commit một bí mật: xóa file đi **không** xóa nó khỏi lịch sử git; phải đổi bí mật đó (đổi mật khẩu Neon, tạo lại token).
+
+Repo phải là **Private**: GitHub → repo → Settings → General → Danger Zone → "Change visibility" đang ở Private. Mời bạn: Settings → Collaborators → Add people.
+
+## Bước 1. Chuỗi kết nối Neon (gửi kênh riêng)
+
+Gửi giá trị `DATABASE_URL_UNPOOLED` trong `.env` của bạn qua **tin nhắn riêng** (không đăng nhóm, không đưa lên git). Họ dán vào `.env` của họ.
+
+Khuyến nghị an toàn hơn (tùy chọn): trong Neon console → project → **Roles** → tạo một role riêng cho bạn của bạn, cấp quyền trên database dự án, và đưa chuỗi của role đó. Khi cần thu hồi quyền chỉ phải xóa role đó, không phải đổi mật khẩu của bạn. Lúc đó chủ dự án vẫn giữ chuỗi gốc.
+
+Thu hồi sau này: Neon console → Roles → Reset password.
+
+Họ **không** chạy `db upgrade`. Chỉ bạn chạy khi đổi cấu trúc database.
+
+## Bước 2. Google Drive
+
+1. Mở Drive → chuột phải thư mục `DrowningProject` (thư mục có ID bạn điền ở `GOOGLE_DRIVE_FOLDER_ID`) → **Share** → thêm Gmail của họ → quyền **Editor**.
+2. Google Cloud Console → **APIs & Services** → **OAuth consent screen** (hoặc *Audience*) → **Test users** → **Add users** → thêm đúng Gmail đó. Nếu không, họ gặp `403 access_denied` như bạn đã gặp.
+3. Gửi riêng file `secrets\google-oauth-client.json` (định danh ứng dụng, không phải mật khẩu Google của bạn, nhưng đừng đăng công khai).
+4. Gửi họ `GOOGLE_DRIVE_FOLDER_ID` (đoạn cuối URL thư mục).
+
+Họ tự chạy `auth drive` và đăng nhập bằng Gmail của họ.
+
+## Bước 3. Kaggle
+
+1. kaggle.com → Datasets → `alanoud-pool` → **Settings/Share** → thêm tên người dùng Kaggle của họ với quyền xem (Viewer). Kiểm tra: họ mở được `https://www.kaggle.com/datasets/vuduc792005/alanoud-pool`.
+2. Họ phải xác minh số điện thoại trên Kaggle và tự tạo token API.
+3. Họ đặt `KAGGLE_KERNEL_REF=<tên-Kaggle-của-họ>/drowning-temporal` và `KAGGLE_DATASET_SOURCES=vuduc792005/alanoud-pool`.
+4. Hạn mức GPU Kaggle tính theo từng tài khoản; job của họ dùng hạn mức của họ.
+
+Điều này thay đổi cách cũ ("chỉ bạn chạy Kaggle"): giờ **mỗi người chạy Kaggle bằng tài khoản của mình**, vẫn chỉ có **một job compute trên toàn hệ thống** nhờ khóa trong PostgreSQL chung. Hai người không chạy song song.
+
+## Bước 4. Những thứ gửi qua kênh riêng (tổng kết)
+
+| Gửi | Cách gửi |
+|---|---|
+| `DATABASE_URL_UNPOOLED` | tin nhắn riêng |
+| `google-oauth-client.json` | tin nhắn riêng / file riêng |
+| `GOOGLE_DRIVE_FOLDER_ID` | tin nhắn thường được |
+| Lời mời GitHub, chia sẻ Drive, chia sẻ dataset Kaggle, Test users | làm trên web, không phải gửi file |
+
+**Tuyệt đối không gửi:** `.env`, `.env.bak`, `.env.pre-neon.bak`, `secrets\google-token.json`, `~\.kaggle\access_token`.
+
+## Bước 5. Cùng kiểm tra sau khi họ cài xong
+
+Nhờ họ chạy và gửi **ảnh chụp** (không có bí mật trong đầu ra):
 ```powershell
-git commit -m "Hệ thống phát hiện đuối nước"
+.\.venv\Scripts\python -m drowning.cli doctor --online
 ```
-Trên github.com tạo repo mới, chọn **Private**, không tick tạo README. Rồi chạy các lệnh GitHub hiện ra (`git remote add origin ...`, `git push -u origin main`). Mời bạn của bạn ở **Settings → Collaborators**. Họ chỉ cần `git clone`.
+Phải thấy `Thiếu bắt buộc: không`. Sau đó cả hai cùng mở trang Train: phải thấy **cùng danh sách job** (vì dùng chung PostgreSQL). Bạn có thể xem bên đó kết quả `prepare_only` bạn đã chạy.
 
-Lưu ý: nếu lỡ commit một bí mật thì xóa file đi sau đó **không** xóa được nó khỏi lịch sử git; phải đổi bí mật đó (đổi mật khẩu Neon, tạo lại token). Vì vậy hãy kiểm tra `git status` trước khi commit đầu tiên.
+## Bước 6. Khi bạn thay đổi hệ thống sau này
 
-Tạo zip mã nguồn (PowerShell), nếu không dùng git:
-```powershell
-cd D:\AI
-$exclude = @('.venv','node_modules','local-cache','secrets','.neon','__pycache__','.env','.env.bak','.env.pre-neon.bak','dist')
-$files = Get-ChildItem DrowningProject -Recurse -File -Force | Where-Object {
-  $p = $_.FullName; -not ($exclude | Where-Object { $p -match [regex]::Escape("\$_\") -or $p.EndsWith("\$_") }) }
-Compress-Archive -Path $files.FullName -DestinationPath D:\AI\drowning-share.zip -Force
-```
-Mở zip kiểm tra: không thấy `.env`, `secrets`, `.venv` trước khi gửi.
+- Đổi mã nguồn: commit và push. Họ `git pull`, cài lại, `npm run build`, chạy `db check`.
+- Đổi cấu trúc database: bạn chạy `db upgrade` **một lần**, rồi báo họ `git pull`.
+- Duyệt thêm nhãn/nhóm: commit thư mục `reviews\` để họ có cùng trạng thái duyệt (bản duyệt không nằm trong database).
+- Duyệt model ứng viên (trang Đánh giá) là quyết định chung: thống nhất ai duyệt.
 
-## Phần 2. Bạn của bạn cần làm trên máy họ
+## Điều bạn cần biết về giới hạn khi dùng chung
 
-1. Cài Python 3.11 và Node.js. Giải nén zip, mở PowerShell trong thư mục dự án.
-2. Tạo môi trường và cài thư viện:
-   ```powershell
-   py -3.11 -m venv .venv
-   .\.venv\Scripts\python -m pip install -e ".[api,drive,vision,ml]"
-   cd web; npm ci; npm run build; cd ..
-   ```
-3. Tạo `.env` từ mẫu: `copy .env.example .env`, rồi điền **chỉ** các dòng sau:
-   ```
-   DATABASE_URL_UNPOOLED=<chuỗi bạn gửi qua kênh riêng>
-   GOOGLE_DRIVE_FOLDER_ID=<cùng ID thư mục Drive của bạn>
-   PERSON_DETECTOR_WEIGHTS=<đường dẫn file .pt trên máy họ>
-   ```
-   Để trống `WORKER_ID` (tự sinh theo máy). `TEST_DATABASE_URL` để trống, họ không cần chạy test PostgreSQL thật.
-4. Cấp Drive bằng tài khoản Gmail của họ: đặt `google-oauth-client.json` (cùng file bạn tải) vào `secrets\`. Bạn có thể gửi riêng file này cho họ, vì đó là định danh ứng dụng, không phải mật khẩu của bạn. Rồi chạy:
-   ```powershell
-   .\.venv\Scripts\python -m drowning.cli auth drive
-   ```
-5. Kiểm tra: `.\.venv\Scripts\python -m drowning.cli db check` (**không** chạy `db upgrade`) và `.\.venv\Scripts\python -m drowning.cli doctor --online`.
-6. Chạy: `.\.venv\Scripts\python -m drowning.cli serve` rồi mở `http://127.0.0.1:8000`.
-
-## Phần 3. Họ làm được gì và không làm được gì
-
-- **Làm được:** xem model và job chung, tải model đã duyệt về máy (kiểm tra SHA-256), chạy thử ảnh/video/camera, đánh dấu đoạn đúng/sai, duyệt dữ liệu.
-- **Không nên làm:** chạy bước Kaggle (prepare/smoke/train) từ máy họ. Notebook `vuduc792005/drowning-temporal` thuộc tài khoản Kaggle của bạn, nên họ cần token Kaggle của bạn mới đẩy được. **Chỉ bạn chạy Kaggle**, để một nơi giữ ô compute.
-- Chỉ một tác vụ compute chạy trên toàn hệ thống: nếu bạn đang train thì máy họ không chạy thử model được cho đến khi xong (hệ thống báo bận, không tự chạy song song).
-- Bản duyệt nhãn nằm trong thư mục `reviews\`, **không** nằm trong database. Nếu bạn duyệt thêm sau này, gửi lại thư mục `reviews\` cho họ.
+- Tiến trình nền (gửi, theo dõi, thu kết quả job Kaggle) chạy trong `serve` **của máy đã tạo job**. Ai tạo job thì máy đó phải mở `serve` để theo dõi; job vẫn chạy trên Kaggle nếu tắt máy và được nối lại khi mở lại.
+- Báo cáo chi tiết của một lần chạy nằm ở máy đã thu kết quả (`local-cache\results`) và gói trên Drive. Máy kia thấy bản tóm tắt trong database.
+- Ảnh mẫu ở trang Dữ liệu cần dataset gốc trên máy đó (`ALANOUD_V4_DATA_ROOT`). Train và chạy thử không cần.
+- Đã kiểm tra thật: PostgreSQL Neon, Drive, Kaggle trên **tài khoản của bạn**. Chưa kiểm tra thật với tài khoản Kaggle/Gmail thứ hai; lần đầu bạn của bạn cài có thể lộ lỗi nhỏ, hãy nhờ họ chụp màn hình lỗi.
 
 ## Nếu họ gặp lỗi
 
-| Lỗi | Nguyên nhân thường gặp |
-|---|---|
-| `403 access_denied` khi `auth drive` | Gmail của họ chưa nằm trong Test users |
-| `db check` báo không kết nối | Sai chuỗi, thiếu `?sslmode=require`, hoặc mạng chặn |
-| `schema chưa ở bản mới nhất` | Bạn đã cập nhật mã nguồn và đổi schema; bạn chạy `db upgrade`, họ cập nhật mã nguồn |
-| Drive: không có quyền ghi | Bạn chưa chia sẻ thư mục Drive cho họ quyền Editor |
+Xem bảng cuối `docs/HUONG_DAN_BAN.md` (mục 14).

@@ -8,6 +8,7 @@ cd D:\AI\DrowningProject
 ```
 
 Chi tiết cấu hình từng dịch vụ: `docs/SETUP.md`. Thêm dataset: `docs/DATASET_ONBOARDING.md`.
+Gửi cho bạn dùng chung: việc của bạn ở `docs/GUI_CHO_BAN.md`; hướng dẫn cài đặt và sử dụng cho bạn của bạn ở `docs/HUONG_DAN_BAN.md`.
 Không dán token, mật khẩu hay `DATABASE_URL` vào chat; chỉ điền vào `.env` hoặc đặt file đúng chỗ.
 
 ## Đã xong
@@ -43,7 +44,7 @@ Còn lại: gửi `DATABASE_URL_UNPOOLED` (hoặc `DATABASE_URL`) cho người d
 - [x] 3.3 Điền `.env`: `PERSON_DETECTOR_WEIGHTS=D:\AI\DrowningProject\local-cache\models\yolo11n.pt`
 - [ ] 3.4 Kiểm tra chất lượng trên video của bạn ở trang Camera/Đánh giá (chưa được kiểm chứng)
 
-## Việc 4. Duyệt dữ liệu Alanoud (chỉ bạn làm được)
+## Việc 4. Xác nhận dữ liệu Alanoud (TÙY CHỌN: bỏ qua vẫn chạy smoke và train; xem `docs/LUONG_DUYET.md`)
 
 - [ ] 4.1 `.\.venv\Scripts\python -m drowning.cli serve` → mở `http://127.0.0.1:8000` → trang **Dữ liệu**
 - [ ] 4.2 Xem ảnh mẫu từng nhãn (Drowning, Swimming, out of water). Báo cáo đã cho thấy: `out of water` chỉ 3,3% số khung; 512 cụm ảnh gần giống nhau nằm xuyên các tập gốc; nhiều crop mờ hoặc có vẻ gán sai
@@ -56,9 +57,9 @@ Còn lại: gửi `DATABASE_URL_UNPOOLED` (hoặc `DATABASE_URL`) cho người d
 - [ ] 5.2 Bước 2 `remote_smoke` (xác nhận GPU) — cần Việc 4 xong
 - [ ] 5.3 Lần chạy Kaggle thật đầu tiên có thể lộ lỗi chưa lường trước (định dạng trạng thái, chờ GPU): chụp trang Train hoặc dán thông báo lỗi cho mình
 
-## Việc 6. Dữ liệu video có nhãn (bắt buộc trước khi train nhánh temporal)
+## Việc 6. Dữ liệu video có nhãn (TÙY CHỌN: chế độ ảnh tự cắt video thành khung ảnh và train video trước, ảnh sau)
 
-- [ ] 6.1 Tìm dataset video có **ID người và nhãn theo thời gian** (CVAT video, hoặc xuất ra `reviewed_jsonl`)
+- [ ] 6.1 Tìm dataset video có **nhãn theo từng người trên từng khung** (CVAT video, hoặc xuất ra `reviewed_jsonl`). Chế độ ảnh chỉ cần nhãn và khung bao quanh người ở mỗi khung hình; không cần chắc chắn ID người liên tục
 - [ ] 6.2 Đặt vào thư mục riêng, điền `.env`: `POOL_VIDEO_DATA_ROOT=` hoặc `USER_VIDEO_DATA_ROOT=`
 - [ ] 6.3 Viết `configs/datasets/<tên>.yaml` theo `docs/DATASET_ONBOARDING.md` (nhờ mình viết giúp khi có dataset)
 - [ ] 6.4 Tải dataset lên Kaggle (Private), thêm vào `KAGGLE_DATASET_SOURCES` (cách nhau bằng dấu phẩy)
