@@ -39,12 +39,13 @@ type Source = {
 }
 
 type Job = { id: string; job_type: string; state: string; phase: string; created_at: string }
-type Model = { id: string; model_family: string; display_version: string; status: string; temporal_trained: boolean; completion_kind: string; created_at: string }
+type Model = { id: string; model_family: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; cached_locally: boolean; temporal_trained: boolean; completion_kind: string; created_at: string }
 type ScanReport = { media_count: number; annotation_count: number; media_counts_by_original_split: Record<string, number>; annotation_counts_by_source_label: Record<string, number>; malformed_annotation_count: number; source_data_modified: boolean }
 type TestReadiness = { ready_for_request: boolean; reason?: string; model_version?: string; max_upload_bytes: number }
 type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number } }
 
 function date(value: string) { return new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' }) }
+function modelKindText(kind: Model['model_kind']) { return kind === 'image_tracked' ? 'ảnh + gộp theo ID' : kind === 'temporal' ? 'temporal' : 'chưa xác định loại' }
 function StatusDot({ ok }: { ok: boolean }) { return <span className={`status-dot ${ok ? 'ok' : 'missing'}`} aria-label={ok ? 'Đã cấu hình' : 'Chưa cấu hình'} /> }
 
 function App() {
@@ -93,7 +94,7 @@ function App() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => { void refresh() }, [refresh, route])
 
   const scanSource = async (source: Source) => {
     setBusySource(source.source_id)
@@ -126,7 +127,7 @@ function App() {
   }
 
   const databaseReady = Boolean(config?.database_configured && config?.database_reachable)
-  const temporalModel = models.find((model) => model.status === 'approved' && model.temporal_trained)
+  const approvedModel = models.find((model) => model.status === 'approved' && model.model_kind)
 
   const syncApprovedModel = async () => {
     setSyncingModel(true)
@@ -207,11 +208,19 @@ function App() {
           <article className="metric-card"><div className="metric-top"><span>DATABASE</span><span className="metric-icon violet">⌘</span></div><div className="metric-value">{config?.database_reachable ? 'Connected' : config?.database_configured ? 'Not ready' : 'Not configured'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.database_reachable)} /> PostgreSQL chung</div></article>
           <article className="metric-card"><div className="metric-top"><span>GOOGLE DRIVE</span><span className="metric-icon blue">↗</span></div><div className="metric-value">{config?.drive_configured ? 'Configured' : 'Not configured'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.drive_configured)} /> Artifact storage</div></article>
           <article className="metric-card"><div className="metric-top"><span>KAGGLE WORKER</span><span className="metric-icon green">⌁</span></div><div className="metric-value">{config?.kaggle_kernel_configured ? 'Configured' : 'Not configured'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.kaggle_kernel_configured)} /> Private · GPU executor</div></article>
-          <article className="metric-card"><div className="metric-top"><span>APPROVED TEMPORAL MODEL</span><span className="metric-icon amber">◈</span></div><div className="metric-value">{temporalModel?.display_version ?? 'None yet'}</div><div className="metric-foot"><StatusDot ok={Boolean(temporalModel)} /> Không tự train hoặc đổi model</div></article>
+          <article className="metric-card"><div className="metric-top"><span>MODEL ĐÃ DUYỆT</span><span className="metric-icon amber">◈</span></div><div className="metric-value">{approvedModel?.display_version ?? 'Chưa có'}</div><div className="metric-foot"><StatusDot ok={Boolean(approvedModel)} /> {approvedModel ? modelKindText(approvedModel.model_kind) : 'Train → Đánh giá → Duyệt'}</div></article>
+        </section>
+
+        <section className="panel media-panel" aria-labelledby="use-model-title">
+          <div className="panel-header"><div><div className="panel-kicker">MODEL ĐÃ DUYỆT</div><h2 id="use-model-title">Dùng model</h2><p>{approvedModel ? `${approvedModel.display_version} · ${modelKindText(approvedModel.model_kind)}` : 'Train → Đánh giá → Duyệt model làm model chính.'}</p></div></div>
+          {approvedModel ? <div className="toolbar">
+            <button className="secondary-button big" disabled={!databaseReady || syncingModel || testingMedia} onClick={() => void syncApprovedModel()} title={approvedModel.cached_locally ? 'Kiểm tra và đồng bộ lại model đã duyệt' : 'Tải model đã duyệt về máy'}>{syncingModel ? 'Đang đồng bộ model…' : approvedModel.cached_locally ? 'Đã có trên máy' : 'Đồng bộ về máy'}</button>
+            <a className="secondary-button big link-button" href="#evaluation">Chạy trên video / ảnh</a>
+            <a className="secondary-button big link-button" href="#camera">Mở Camera</a>
+          </div> : <div className="toolbar"><a className="secondary-button big link-button" href="#train">Mở trang Train</a><a className="secondary-button big link-button" href="#evaluation">Mở trang Đánh giá</a></div>}
         </section>
 
         <section className="panel media-panel" id="media-test">
-          <button className="secondary-button" disabled={!databaseReady || !temporalModel || syncingModel || testingMedia} onClick={() => void syncApprovedModel()}>{syncingModel ? 'Đang đồng bộ model…' : 'Đồng bộ model đã duyệt'}</button>
           <div className="panel-header"><div><div className="panel-kicker">LOCAL INFERENCE</div><h2>Kiểm tra ảnh / video</h2><p>Dùng đúng model đã duyệt và quyền compute chung.</p></div><span className="count-pill">{testReadiness?.ready_for_request ? testReadiness.model_version : 'Chưa sẵn sàng'}</span></div>
           <div className="media-controls">
             <label>Loại input<select value={mediaKind} disabled={testingMedia} onChange={(event) => { setMediaKind(event.target.value as 'image' | 'video'); setMediaFile(null); setMediaKey(null); setMediaResult(null) }}><option value="image">Ảnh</option><option value="video">Video offline</option></select></label>
@@ -242,7 +251,7 @@ function App() {
 
           <div className="right-column">
             <div className="panel model-panel" id="models"><div className="panel-header compact"><div><div className="panel-kicker">MODEL REGISTRY</div><h2>Model versions</h2></div><span className="count-pill">{models.length}</span></div>
-              {models.length === 0 ? <div className="empty-state small"><div className="empty-symbol">◈</div><b>Chưa có model</b><span>Candidate cần train trên Kaggle và được duyệt trước khi dùng.</span></div> : models.slice(0, 4).map((model) => <div className="model-row" key={model.id}><div className="model-version">{model.display_version}</div><div><b>{model.model_family}</b><small>{model.completion_kind} · {model.temporal_trained ? 'temporal' : 'image-only'}</small></div><span className={`state-tag ${model.status === 'approved' ? 'approved' : 'pending'}`}>{model.status}</span>{model.status === 'candidate' && <div className="review-actions"><button className="review-button approve" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'approve')}>Duyệt</button><button className="review-button reject" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'reject')}>Từ chối</button></div>}</div>)}
+              {models.length === 0 ? <div className="empty-state small"><div className="empty-symbol">◈</div><b>Chưa có model</b><span>Candidate cần train trên Kaggle và được duyệt trước khi dùng.</span></div> : models.slice(0, 4).map((model) => <div className="model-row" key={model.id}><div className="model-version">{model.display_version}</div><div><b>{model.model_family}</b><small>{modelKindText(model.model_kind)}</small></div><span className={`state-tag ${model.status === 'approved' ? 'approved' : 'pending'}`}>{model.status}</span>{model.status === 'candidate' && <div className="review-actions"><button className="review-button approve" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'approve')}>Duyệt</button><button className="review-button reject" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'reject')}>Từ chối</button></div>}</div>)}
             </div>
             <div className="panel jobs-panel" id="jobs"><div className="panel-header compact"><div><div className="panel-kicker">COMPUTE QUEUE</div><h2>Jobs gần đây</h2></div><span className="count-pill">{jobs.length}</span></div>
               {jobs.length === 0 ? <div className="empty-state small"><div className="empty-symbol">◷</div><b>Queue đang trống</b><span>{databaseReady ? 'Chưa có job nào.' : 'Cần kết nối PostgreSQL để ghi job bền vững.'}</span></div> : <div className="job-list">{jobs.slice(0, 5).map((job) => <div className="job-row" key={job.id}><span className="job-type">{job.job_type}</span><div className="job-info"><b>{job.id.slice(0, 8)}</b><small>{date(job.created_at)} · {job.phase}</small></div><span className="state-tag pending">{job.state}</span>{job.job_type === 'inference' && ['completed', 'sync_pending'].includes(job.state) && <button className="secondary-button" onClick={() => void showResults(job)}>Kết quả</button>}</div>)}</div>}

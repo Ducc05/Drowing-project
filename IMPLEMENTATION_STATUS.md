@@ -4,6 +4,12 @@ Last updated: 2026-10-26
 
 This status separates code written, checks actually run, and work not verified. It does not claim cloud, model, or user acceptance based on local tests.
 
+## Approved model overview checkpoint — 2026-10-26
+
+- **Implemented:** Overview recognizes approved `temporal` and `image_tracked` models using `model_kind`, displays the version/type, shows local cache status, and provides synchronization, Evaluation, and Camera actions. The existing image/video form and candidate review actions remain available. Navigating between pages refreshes the overview data so a newly approved model appears on return. Evaluation labels use `model_kind` and only temporal models show the temporal validation panel. Backend code was not changed in this checkpoint.
+- **Tested:** all four `tests.test_model_sync` tests passed, including a new image-tracked candidate approval/list/sync/cache test using a temporary database and fake Drive. Full Python regression passed **268/268 tests** with `DATABASE_URL` and `DATABASE_URL_UNPOOLED` empty (106.245 s, including dedicated PostgreSQL checks). `npm run build` passed and rebuilt `web/dist`; `npm run lint` passed with the same four existing warnings.
+- **Live UI limit:** the backend was already listening on port 8000 and was not restarted. A separate browser tab for `http://localhost:8000/#overview` was blocked because the browser origin permission was declined; live display and link-click acceptance remain unverified. No live model review, inference job, camera start, or cloud action was triggered.
+
 ## Video evaluation speed and cancellation checkpoint — 2026-10-26
 
 - **Implemented:** video inference defaults to `frame_stride=3` (configurable 1–10); skipped frames avoid color conversion/detector/classifier/tracking. Progress is stored periodically in the job payload and exposed by `GET /api/v1/jobs`. Browser-playable MP4/WebM inputs use a copied `source.*` plus detections JSON and a browser canvas overlay; other inputs fall back to VP8/WebM while keeping original duration. The evaluation page selects the correct result, interpolates boxes, shows model scores, polls progress, and can stop a running inference. The local media-job service is now an app-scoped singleton so the stop flag is shared by both requests. Camera inference remains on its existing path; camera captions now include the displayed label score.

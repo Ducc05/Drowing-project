@@ -12,7 +12,7 @@ const labelColor: Record<string, string> = { drowning: '#d86a63', swimming: '#5a
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
 type ModelRow = {
-  id: string; display_version: string; status: string; temporal_trained: boolean; completion_kind: string
+  id: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; temporal_trained: boolean; completion_kind: string
   metrics: { image_validation?: Metrics; temporal_validation?: Metrics; device?: string }; cached_locally: boolean; created_at: string
   checkpoint: { drive_url: string | null; archive_sha256: string; weights_sha256?: string | null; size_bytes: number; status: string } | null
 }
@@ -282,7 +282,7 @@ export default function EvaluationPage() {
       right={<label className="field inline">Tên người duyệt<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Tên của bạn" /></label>}>
       {models.length === 0 ? <div className="empty-state">Chưa có model nào. Hoàn tất bước train ở trang Train để có model ứng viên.</div> : <>
         <div className="model-tabs">{models.map((m) => <button key={m.id} className={`model-tab ${m.id === selected ? 'on' : ''}`} onClick={() => { setSelected(m.id); setJobId('') }}>
-          <b>{m.display_version}</b><span>{m.status}{m.temporal_trained ? ' · temporal' : ' · ảnh đơn'}</span></button>)}</div>
+          <b>{m.display_version}</b><span>{m.status} · {m.model_kind === 'image_tracked' ? 'ảnh + gộp theo ID' : m.model_kind === 'temporal' ? 'temporal' : 'chưa xác định loại'}</span></button>)}</div>
         {model && <>
           <div className="stat-row">
             <div><b>{model.status}</b><span>trạng thái · tạo {when(model.created_at)}</span></div>
@@ -296,7 +296,7 @@ export default function EvaluationPage() {
             <div>SHA-256 gói: <code>{model.checkpoint.archive_sha256}</code> · {fmt(Math.round(model.checkpoint.size_bytes / 1024))} KiB · trạng thái {model.checkpoint.status}</div>
             {model.checkpoint.weights_sha256 && <div>SHA-256 trọng số: <code>{model.checkpoint.weights_sha256}</code></div>}
           </div>}
-          <div className="metric-pair"><MetricsBlock title="Validation — nhánh ảnh" metrics={model.metrics.image_validation} /><MetricsBlock title="Validation — nhánh temporal" metrics={model.metrics.temporal_validation} /></div>
+          <div className="metric-pair"><MetricsBlock title="Validation — nhánh ảnh" metrics={model.metrics.image_validation} />{model.model_kind === 'temporal' && <MetricsBlock title="Validation — nhánh temporal" metrics={model.metrics.temporal_validation} />}</div>
           <p className="muted">{evaluation?.training_metrics_note}</p>
           <div className="toolbar">
             <button className="secondary-button big" disabled={action.busy || model.cached_locally} onClick={() => void sync()}>{model.cached_locally ? 'Đã có trên máy' : 'Tải model về máy để thử'}</button>

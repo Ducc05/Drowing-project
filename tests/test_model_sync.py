@@ -3,6 +3,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,6 +16,7 @@ from drowning.api.inference import get_approved_model
 from drowning.config import Settings
 from drowning.db.models import Artifact, Base, ExecutionSlot, Job, ModelVersion
 from drowning.integrations.drive import sha256_file
+from drowning.inference.aggregation import DEFAULT_AGGREGATION
 from tests.test_candidate_sync import make_candidate_archive
 from tests.test_media_api import FakePipeline, png, request
 
@@ -109,6 +111,45 @@ class ApprovedModelSyncTests(unittest.TestCase):
         self.assertEqual(list(prior.parent.glob(".model-sync-*")), [])
         self.drive.corrupt = False
         self.assertEqual(request(self.app, "POST", "/api/v1/models/sync-approved").status_code, 200)
+
+    def test_image_tracked_approved_model_is_listed_and_can_sync_to_local_cache(self):
+        bundle = self.root / "bundle"
+        manifest_path = bundle / "model-bundle" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.update(model_kind="image_tracked", temporal_trained=False,
+                        temporal_contract=None, aggregation=DEFAULT_AGGREGATION)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        metrics_path = bundle / "metrics.json"
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        metrics["model_kind"] = "image_tracked"
+        metrics.pop("temporal_validation", None)
+        metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+        with zipfile.ZipFile(self.archive, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(bundle.rglob("*")):
+                if path.is_file():
+                    archive.write(path, path.relative_to(bundle).as_posix())
+        with Session(self.engine) as session:
+            model = session.get(ModelVersion, self.model_id)
+            model.temporal_trained = False
+            model.metrics = metrics
+            artifact = session.get(Artifact, model.artifact_id)
+            artifact.sha256 = sha256_file(self.archive)
+            artifact.size_bytes = self.archive.stat().st_size
+            session.commit()
+        self.approve()
+
+        before = request(self.app, "GET", "/api/v1/models").json()["models"][0]
+        self.assertEqual(before["status"], "approved")
+        self.assertEqual(before["model_kind"], "image_tracked")
+        self.assertFalse(before["temporal_trained"])
+        self.assertFalse(before["cached_locally"])
+        synced = request(self.app, "POST", "/api/v1/models/sync-approved")
+        self.assertEqual(synced.status_code, 200, synced.text)
+        self.assertTrue(synced.json()["downloaded"])
+        after = request(self.app, "GET", "/api/v1/models").json()["models"][0]
+        self.assertEqual(after["model_kind"], "image_tracked")
+        self.assertTrue(after["cached_locally"])
+        self.assertEqual(self.drive.calls, 1)
 
     def test_candidate_cannot_be_installed_as_approved(self):
         response = request(self.app, "POST", "/api/v1/models/sync-approved")
