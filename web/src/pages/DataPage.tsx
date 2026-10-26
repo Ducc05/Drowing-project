@@ -31,7 +31,12 @@ type Review = {
   grouping_review: 'verified' | 'pending'; requirements: Requirement[]
   task: { state: string; step?: string; error?: string | null }
   sheets: Sheet[] | null; quality: Quality | null; proposed_groups_available: boolean
+  auto_rules: AutoRules | null; group_sheets: GroupSheet[] | null
+  mapping_reviewer_kind?: string | null; grouping_reviewer?: string | null; grouping_reviewer_kind?: string | null
 }
+type AutoRule = { id: string; status: 'pass' | 'warn' | 'fail'; value: unknown; threshold: unknown; detail: string }
+type AutoRules = { outcome: 'pass' | 'blocked'; failed: string[]; warnings: string[]; rules: AutoRule[]; policy_version: string }
+type GroupSheet = { key: string; kind: 'cross-split' | 'same-split' | 'largest'; rows: number; clusters_in_export: number }
 type SourceRow = { source_id: string; source_version: string; format: string; modality: string; root_exists: boolean; root_env: string }
 
 const classNames: Record<string, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
@@ -87,7 +92,7 @@ function SourceReview({ source }: { source: SourceRow }) {
     right={<div className="tag-row">
       <Tag tone={review?.mapping_review === 'approved' ? 'ok' : review?.mapping_review === 'stale' ? 'bad' : 'warn'}>
         ánh xạ: {review?.mapping_review === 'approved' ? `đã duyệt${review.mapping_reviewer ? ` (${review.mapping_reviewer})` : ''}` : review?.mapping_review === 'stale' ? 'đã đổi, cần duyệt lại' : 'chưa duyệt'}</Tag>
-      <Tag tone={review?.grouping_review === 'verified' ? 'ok' : 'warn'}>nhóm nguồn: {review?.grouping_review === 'verified' ? 'đã xác nhận' : 'chưa xác nhận'}</Tag>
+      <Tag tone={review?.grouping_review === 'verified' ? 'ok' : 'warn'}>nhóm nguồn: {review?.grouping_review === 'verified' ? `đã xác nhận${review.grouping_reviewer ? ` (${review.grouping_reviewer})` : ''}` : 'chưa xác nhận'}</Tag>
     </div>}>
     <Banner error={action.error} notice={action.notice} />
     {!source.root_exists && <div className="callout warn">Chưa điền hoặc không tìm thấy thư mục dữ liệu: biến <code>{source.root_env}</code> trong <code>.env</code>.</div>}
@@ -97,6 +102,20 @@ function SourceReview({ source }: { source: SourceRow }) {
       <span className="muted">Tạo ảnh mẫu thật cho từng nhãn, báo cáo chất lượng và đề xuất nhóm ảnh trùng. Không train, không sửa dữ liệu gốc.</span>
     </div>
     {review?.task.state === 'failed' && <div className="callout bad">Chuẩn bị thất bại: {review.task.error}</div>}
+
+    {review?.auto_rules && <>
+      <h3 className="section-title">Quy tắc tự động (máy chấm, không cần bạn)</h3>
+      <div className={`callout ${review.auto_rules.outcome === 'pass' ? 'ok' : 'bad'}`}>
+        {review.auto_rules.outcome === 'pass' ? 'Tất cả quy tắc bắt buộc đều đạt.' : `Bị chặn bởi: ${review.auto_rules.failed.join(', ')}.`}
+        {review.auto_rules.warnings.length > 0 && ` Cảnh báo (không chặn): ${review.auto_rules.warnings.join(', ')}.`} Chính sách phiên bản {review.auto_rules.policy_version} (configs/review_policy.yaml).
+      </div>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>Quy tắc</th><th>Kết quả</th><th>Giá trị</th><th>Ngưỡng</th></tr></thead>
+        <tbody>{review.auto_rules.rules.map((rule) => <tr key={rule.id}><td title={rule.detail}>{rule.id}</td>
+          <td><Tag tone={rule.status === 'pass' ? 'ok' : rule.status === 'warn' ? 'warn' : 'bad'}>{rule.status}</Tag></td>
+          <td>{JSON.stringify(rule.value)}</td><td>{JSON.stringify(rule.threshold)}</td></tr>)}</tbody></table></div>
+      <div className="callout info">Phần cần nhìn ảnh (ý nghĩa nhãn, ảnh gần giống nhau có thật là cùng một cảnh) do AI duyệt theo tiêu chí và ngưỡng cố định. Bạn chỉ bị hỏi khi AI trả "uncertain".
+        Chạy <code>drownctl review evidence {source.source_id}</code> để tạo gói bằng chứng cho AI; xem <code>docs/LUONG_DUYET.md</code>.</div>
+    </>}
 
     {quality && <>
       <h3 className="section-title">1. Báo cáo chất lượng</h3>
@@ -167,6 +186,13 @@ function SourceReview({ source }: { source: SourceRow }) {
       </div>
       {near.cross_split_examples && near.cross_split_examples.length > 0 && <details><summary>Ví dụ cụm vắt qua nhiều split gốc</summary>
         <ul className="paths">{near.cross_split_examples.slice(0, 5).map((cluster, index) => <li key={index}>{cluster.map((item) => `${item.split}: ${item.path.split('/').pop()}`).join('  |  ')}</li>)}</ul></details>}
+      {review?.group_sheets && <>
+        <p className="muted">Bằng chứng nhìn được: mỗi <b>hàng</b> là một cụm ảnh bị gom chung. Viền màu là split gốc (xanh dương = train, cam = valid, đỏ = test). Câu hỏi: các ảnh trong một hàng có phải cùng một ảnh/cảnh (xoay, đổi màu, cắt) không?</p>
+        <div className="sheet-grid">{review.group_sheets.map((sheet) => <figure key={sheet.key}>
+          <img loading="lazy" src={api(`${base}/sheets/${sheet.key}`)} alt={`Cụm ảnh ${sheet.kind}`} />
+          <figcaption>{sheet.kind === 'cross-split' ? `Cụm vắt qua nhiều split gốc (${fmt(sheet.clusters_in_export)} cụm trong dữ liệu, hiển thị ${sheet.rows})`
+            : sheet.kind === 'same-split' ? `Cụm cùng một split (${fmt(sheet.clusters_in_export)} cụm, hiển thị ${sheet.rows})` : 'Mẫu từ cụm lớn nhất: có phải một cảnh hay nhiều ảnh không liên quan bị nối dây chuyền?'}</figcaption>
+        </figure>)}</div></>}
       <label className="field">Cơ sở để coi các nhóm này là tách biệt (tối thiểu 20 ký tự)
         <textarea rows={2} value={groupNote} onChange={(e) => setGroupNote(e.target.value)} placeholder="Ví dụ: đã xem các cặp mẫu vắt qua split, đều là cùng một ảnh gốc." /></label>
       <div className="toolbar">
@@ -191,7 +217,7 @@ export default function DataPage() {
   }, [])
   return <div className="page-stack">
     <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> DỮ LIỆU</div><h1>Duyệt dữ liệu trước khi train</h1>
-      <p className="subtitle">Bạn không phải tự gán nhãn. Bạn chỉ xem ảnh mẫu thật, xác nhận nghĩa của nhãn và xác nhận cách nhóm ảnh trùng; mọi thứ gắn với tên người duyệt.</p></header>
+      <p className="subtitle">Bước này chỉ để XÁC NHẬN và hoàn toàn tùy chọn: bỏ qua thì vẫn chạy được smoke và train, chỉ là nguồn được ghi là "chưa xác nhận". Bạn có thể tự xem, hoặc đưa gói bằng chứng cho AI duyệt theo quy tắc (docs/LUONG_DUYET.md).</p></header>
     <Banner error={error} />
     {sources.length === 0 && !error && <div className="empty-state">Chưa có nguồn dữ liệu trong configs/datasets.</div>}
     {sources.map((source) => <SourceReview key={source.source_id} source={source} />)}

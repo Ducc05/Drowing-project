@@ -12,7 +12,8 @@ type Status = {
 type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string }
 
 const labelText: Record<string, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
-const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)' }
+const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
+  image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)' }
 
 export default function CameraPage() {
   const [source, setSource] = useState('0')

@@ -109,11 +109,11 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
         {tracks.map((id) => <div className="track-line" key={id}>
           <span className="track-id">{id.replace('trk-', '#')}</span>
           <div className="track-bar">{segments[id].map((segment) => <button key={`${segment.start}-${segment.label}`}
-            className={`seg ${segment.branch === 'temporal' ? '' : 'warmup'}`} title={`${labelText[segment.label]} · ${segment.branch} · ${(segment.start / 1000).toFixed(1)}–${(segment.end / 1000).toFixed(1)}s`}
+            className={`seg ${segment.branch === 'temporal' || segment.branch === 'image_tracked' ? '' : 'warmup'}`} title={`${labelText[segment.label]} · ${segment.branch} · ${(segment.start / 1000).toFixed(1)}–${(segment.end / 1000).toFixed(1)}s`}
             style={{ left: `${(segment.start / duration) * 100}%`, width: `${Math.max(0.6, ((segment.end - segment.start) / duration) * 100)}%`, background: labelColor[segment.label] }}
             onClick={() => pick(id, segment)} />)}</div>
         </div>)}
-        <div className="legend">{LABELS.map((l) => <span key={l}><i style={{ background: labelColor[l] }} />{labelText[l]}</span>)}<span><i className="hatch" />dự đoán ảnh đơn (khởi động, chưa đủ chuỗi)</span></div>
+        <div className="legend">{LABELS.map((l) => <span key={l}><i style={{ background: labelColor[l] }} />{labelText[l]}</span>)}<span><i className="hatch" />dự đoán ảnh đơn (khởi động, chưa đủ chuỗi hoặc chưa đủ khung của người đó)</span></div>
       </div>
     </div>
     <div className="mark-form">
