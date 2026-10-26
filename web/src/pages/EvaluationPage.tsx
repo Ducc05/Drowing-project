@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import type { RefObject } from 'react'
 import { api, fmt, newKey, pct, post, request, useAction, when } from '../api'
 import type { JobSummary } from '../api'
 import { Banner, Matrix, Panel, Tag } from '../ui'
@@ -28,10 +29,62 @@ type Evaluation = {
   training_metrics_note: string; test_runs: { videos: number; images: number; videos_with_review_marks: number }
   human_review: MarkSummary; decisions: Array<{ decision: string; reviewer: string; comment: string; at: string }>
 }
-type Detection = { track_id: string; timestamp_ms: number; label: Label | null; prediction_branch: string }
-type MediaResult = { job_id: string; state: string; model_version_id: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number } }
-type VideoJob = JobSummary & { mode?: string | null; model_version_id?: string | null }
+type Detection = { track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string }
+type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video' }
+type MediaResult = { job_id: string; state: string; model_version_id: string; files: Record<string, string>; summary?: VideoSummary }
+type VideoJob = JobSummary & { mode?: string | null; model_version_id?: string | null; idempotency_key?: string; frame_stride?: number; progress?: { frame: number; total: number; processed: number; elapsed_s: number; eta_s: number | null } | null }
 type Segment = { label: Label; start: number; end: number; branch: string }
+
+function VideoOverlay({ video, detections, summary }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary }) {
+  const canvas = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const element = video.current, layer = canvas.current
+    if (!element || !layer || summary?.render !== 'overlay') return
+    let raf = 0, frameHandle: number | undefined, alive = true
+    const byTrack = new Map<string, Detection[]>()
+    for (const record of detections) byTrack.set(record.track_id, [...(byTrack.get(record.track_id) ?? []), record])
+    for (const list of byTrack.values()) list.sort((a, b) => a.timestamp_ms - b.timestamp_ms)
+    const draw = () => {
+      if (!alive) return
+      const bounds = element.getBoundingClientRect(), ratio = window.devicePixelRatio || 1
+      if (bounds.width && bounds.height) {
+        if (layer.width !== Math.round(bounds.width * ratio) || layer.height !== Math.round(bounds.height * ratio)) {
+          layer.width = Math.round(bounds.width * ratio); layer.height = Math.round(bounds.height * ratio)
+        }
+        const ctx = layer.getContext('2d')
+        if (ctx && element.videoWidth && element.videoHeight) {
+          ctx.setTransform(ratio, 0, 0, ratio, 0, 0); ctx.clearRect(0, 0, bounds.width, bounds.height)
+          const sx = bounds.width / element.videoWidth, sy = bounds.height / element.videoHeight
+          const at = element.currentTime * 1000
+          const step = 1000 * (summary.frame_stride ?? 3) / (summary.fps_metadata || 30)
+          for (const [trackId, list] of byTrack) {
+            let left: Detection | undefined, right: Detection | undefined
+            for (const row of list) { if (row.timestamp_ms <= at) left = row; if (row.timestamp_ms >= at) { right = row; break } }
+            let box: number[] | undefined
+            if (left && right && left !== right && right.timestamp_ms - left.timestamp_ms <= (summary.max_gap_ms ?? 1500)) {
+              const amount = (at - left.timestamp_ms) / Math.max(1, right.timestamp_ms - left.timestamp_ms)
+              box = left.bbox_xyxy.map((value, index) => value + (right!.bbox_xyxy[index] - value) * amount)
+            } else if (left && right && left === right) box = left.bbox_xyxy
+            else if (left && at - left.timestamp_ms <= step) box = left.bbox_xyxy
+            if (!box || !left) continue
+            const label = left.label ?? 'unknown', color = labelColor[label] ?? '#fff'
+            const [x1, y1, x2, y2] = box
+            ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy)
+            const classIndex = LABELS.indexOf(left.label as Label), score = left.class_scores && classIndex >= 0 ? left.class_scores[classIndex] : null
+            const caption = `${trackId.replace('trk-', '#')}  ${left.label ? labelText[left.label] : label}${score == null ? '' : `  ${(score * 100).toFixed(0)}%`}`
+            ctx.font = '14px system-ui'; const textWidth = ctx.measureText(caption).width, tx = x1 * sx, ty = Math.max(17, y1 * sy - 5)
+            ctx.fillStyle = color; ctx.fillRect(tx, ty - 15, textWidth + 8, 19); ctx.fillStyle = '#101820'; ctx.fillText(caption, tx + 4, ty - 1)
+          }
+        }
+      }
+      if ('requestVideoFrameCallback' in element) frameHandle = element.requestVideoFrameCallback(draw)
+      else raf = requestAnimationFrame(draw)
+    }
+    const resize = new ResizeObserver(draw); resize.observe(element); draw()
+    return () => { alive = false; resize.disconnect(); cancelAnimationFrame(raf); if (frameHandle !== undefined && 'cancelVideoFrameCallback' in element) element.cancelVideoFrameCallback(frameHandle) }
+  }, [detections, summary, video])
+  return summary?.render === 'overlay' ? <canvas ref={canvas} className="video-overlay" aria-hidden="true" /> : null
+}
 
 function MetricsBlock({ title, metrics }: { title: string; metrics?: Metrics }) {
   if (!metrics) return <div className="metric-box"><h4>{title}</h4><p className="muted">Không có.</p></div>
@@ -65,6 +118,7 @@ function buildSegments(detections: Detection[]): Record<string, Segment[]> {
 function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: string; onChanged: () => void }) {
   const video = useRef<HTMLVideoElement>(null)
   const [detections, setDetections] = useState<Detection[]>([])
+  const [summary, setSummary] = useState<VideoSummary>()
   const [marks, setMarks] = useState<Mark[]>([])
   const [track, setTrack] = useState('')
   const [start, setStart] = useState<number | null>(null)
@@ -78,6 +132,7 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const loadMarks = useCallback(async () => { setMarks((await request<{ marks: Mark[] }>(`/api/v1/jobs/${jobId}/review-marks`)).marks) }, [jobId])
   useEffect(() => {
     request<{ detections: Detection[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => setDetections(r.detections)).catch((e) => setActionError(String(e)))
+    request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setActionError(String(e)))
     void loadMarks().catch((e) => setActionError(String(e)))
   }, [jobId, loadMarks, setActionError])
 
@@ -102,7 +157,8 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   return <div className="review-area">
     <Banner error={action.error} notice={action.notice} />
     <div className="review-layout">
-      <video ref={video} controls src={api(`/api/v1/jobs/${jobId}/results/annotated`)} />
+      <div className="video-shell"><video ref={video} controls src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
+        <VideoOverlay video={video} detections={detections} summary={summary} /></div>
       <div className="timeline-box">
         <p className="muted">Mỗi dòng là một người do tracker gán ID tạm (không phải danh tính đã xác minh). Màu là nhãn model dự đoán; bấm vào một đoạn để chọn khoảng thời gian cần đánh dấu.</p>
         {tracks.length === 0 && <p className="muted">Không có phát hiện nào trong video.</p>}
@@ -144,6 +200,8 @@ export default function EvaluationPage() {
   const [jobId, setJobId] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [key, setKey] = useState<string | null>(null)
+  const [activeVideoJob, setActiveVideoJob] = useState<VideoJob | null>(null)
+  const [stopPending, setStopPending] = useState(false)
   const [reviewer, setReviewer] = useState(() => localStorage.getItem('reviewer') ?? '')
   const action = useAction()
   const setActionError = action.setError
@@ -161,6 +219,20 @@ export default function EvaluationPage() {
   useEffect(() => { void loadModels().catch((e) => setActionError(String(e))) }, [loadModels, setActionError])
   useEffect(() => { void loadEvaluation().catch((e) => setActionError(String(e))) }, [loadEvaluation, setActionError])
   useEffect(() => { localStorage.setItem('reviewer', reviewer) }, [reviewer])
+  useEffect(() => {
+    if (!key) return
+    let alive = true
+    const poll = async () => {
+      try {
+        const rows = (await request<{ jobs: VideoJob[] }>('/api/v1/jobs')).jobs
+        const match = rows.find((job) => job.idempotency_key === key)
+        if (alive && match) setActiveVideoJob(match)
+      } catch { /* the upload request reports the primary failure */ }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2000)
+    return () => { alive = false; window.clearInterval(timer) }
+  }, [key])
 
   const model = models.find((m) => m.id === selected)
   const modelJobs = videoJobs.filter((job) => job.model_version_id === selected)
@@ -172,8 +244,18 @@ export default function EvaluationPage() {
     setKey(k)
     const form = new FormData()
     form.append('file', file)
-    const result = await request<MediaResult>(`/api/v1/test/video?model_version_id=${selected}`, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
-    setKey(null); setFile(null); setJobId(result.job_id)
+    let result: MediaResult
+    try {
+      result = await request<MediaResult>(`/api/v1/test/video?model_version_id=${selected}&frame_stride=3`, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
+    } catch (error) {
+      const detail = error && typeof error === 'object' && 'detail' in error ? (error as { detail?: { state?: string } }).detail : undefined
+      if (detail?.state === 'cancelled') {
+        setActiveVideoJob((job) => job ? { ...job, state: 'cancelled' } : job)
+        return 'Đã dừng xử lý video; ô compute đã được nhả.'
+      }
+      throw error
+    } finally { setKey(null) }
+    setFile(null); setJobId(result.job_id); setActiveVideoJob(null)
     await loadModels(); await loadEvaluation()
     return `Xử lý xong ${fmt(result.summary?.frame_count)} khung hình. Hãy xem video và đánh dấu đoạn đúng/sai.`
   })
@@ -182,6 +264,15 @@ export default function EvaluationPage() {
     await loadModels(); await loadEvaluation()
     return decision === 'approve' ? 'Đã duyệt model làm model chính.' : 'Đã từ chối model; phiên bản vẫn được lưu.'
   })
+  const stopVideo = async () => {
+    if (!activeVideoJob) return
+    setStopPending(true)
+    try {
+      const result = await post<{ message: string }>(`/api/v1/test/jobs/${activeVideoJob.id}/stop`)
+      action.setNotice(result.message)
+    } catch (error) { action.setError(error instanceof Error ? error.message : String(error)) }
+    finally { setStopPending(false) }
+  }
 
   return <div className="page-stack">
     <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> ĐÁNH GIÁ</div><h1>Xem model làm việc trên video thật</h1>
@@ -212,6 +303,16 @@ export default function EvaluationPage() {
             <label className="field inline">Video thử (tối đa 512 MiB)<input type="file" accept=".mp4,.avi,.mov,.mkv,.webm" onChange={(e: ChangeEvent<HTMLInputElement>) => { setFile(e.target.files?.[0] ?? null); setKey(null) }} /></label>
             <button className="primary-button" disabled={!model.cached_locally || !file || action.busy} onClick={() => void runVideo()}>{action.busy ? 'Đang xử lý…' : 'Chạy thử với model này'}</button>
           </div>
+          {key && <div className="callout info progress-box">
+            <div><b>{activeVideoJob?.state === 'queued' ? 'Đang chờ ô compute' : 'Đang xử lý video'}</b>
+              {activeVideoJob?.progress && <> · detector đã xử lý {fmt(activeVideoJob.progress.processed)}/{fmt(Math.ceil(activeVideoJob.progress.total / (activeVideoJob.frame_stride || 3)))} khung
+                ({fmt(activeVideoJob.progress.frame)}/{fmt(activeVideoJob.progress.total)} khung video)
+                {activeVideoJob.progress.eta_s != null && <> · còn khoảng {Math.ceil(activeVideoJob.progress.eta_s / 60)} phút</>}</>}</div>
+            <progress max={activeVideoJob?.progress?.total || 1} value={activeVideoJob?.progress?.frame || 0} />
+            {activeVideoJob && <button className="secondary-button big stop" disabled={stopPending || activeVideoJob.state === 'cancellation_requested'} onClick={() => void stopVideo()}>
+              {stopPending || activeVideoJob.state === 'cancellation_requested' ? 'Đang dừng…' : 'Dừng'}</button>}
+          </div>}
+          {activeVideoJob?.state === 'cancelled' && <p className="muted">Đã dừng xử lý video; ô compute đã được nhả.</p>}
           {!model.cached_locally && <p className="muted">Cần tải model về máy trước, và cần PERSON_DETECTOR_WEIGHTS trong .env để chạy thử.</p>}
           {modelJobs.length > 0 && <div className="reopen">Video đã chạy: {modelJobs.map((job) => <button key={job.id} className={`secondary-button big ${job.id === jobId ? 'on' : ''}`} onClick={() => setJobId(job.id)}>{job.id.slice(0, 8)} · {when(job.created_at)}</button>)}</div>}
         </>}

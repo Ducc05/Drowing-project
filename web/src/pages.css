@@ -97,6 +97,11 @@ details summary { cursor: pointer; font-size: 12.5px; color: #43648c; }
 .review-area { display: flex; flex-direction: column; gap: 14px; }
 .review-layout { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
 .review-layout video { width: 100%; border-radius: 9px; background: #172238; max-height: 420px; }
+.video-shell { position: relative; width: 100%; }
+.video-shell video { display: block; }
+.video-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.progress-box { display: grid; grid-template-columns: 1fr auto; gap: 10px 14px; align-items: center; }
+.progress-box progress { width: 100%; grid-column: 1 / -1; }
 .timeline-box { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .track-line { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; align-items: center; }
 .track-id { font: 650 12px var(--mono); color: #5d6a82; }

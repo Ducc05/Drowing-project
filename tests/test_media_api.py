@@ -3,6 +3,8 @@ import asyncio
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -48,8 +50,22 @@ class FakePipeline:
             {"bbox_xyxy": [3, 4, 24, 32], "label": "swimming", "prediction_branch": "image",
              "identity_verified": False, "class_scores": [0.1, 0.8, 0.1]}]}
 
-    def infer_video(self, source, destination):
+    def infer_video(self, source, destination, *, frame_stride=3, render="video", progress=None, should_stop=None):
         self.calls += 1
+        if progress:
+            progress({"frame": 3, "total": 12, "processed": 1, "elapsed_s": 0.4, "eta_s": 4.4})
+        from drowning.api.media import browser_playable
+        if render == "overlay" and browser_playable(source):
+            import shutil
+            source_copy = destination.parent / f"source{source.suffix}"
+            shutil.copy2(source, source_copy)
+            detections = destination.with_suffix(".detections.json")
+            detections.write_text(json.dumps({"model_version": "fixture-v1", "frame_count": 0,
+                                              "frame_stride": frame_stride, "render": "overlay",
+                                              "scores_are_calibrated_probabilities": False}), encoding="utf-8")
+            return {"model_version": "fixture-v1", "frame_count": 0, "processed_frames": 0,
+                    "frame_stride": frame_stride, "render": "overlay", "video_path": str(source_copy),
+                    "source_path": str(source_copy), "detections_path": str(detections)}
         capture = cv2.VideoCapture(str(source))
         writer = cv2.VideoWriter(str(destination), cv2.VideoWriter_fourcc(*"VP80"), 10, (48, 40))
         count = 0
@@ -64,8 +80,22 @@ class FakePipeline:
         detections = destination.with_suffix(".detections.json")
         detections.write_text(json.dumps({"model_version": "fixture-v1", "frame_count": count,
                                           "scores_are_calibrated_probabilities": False}), encoding="utf-8")
-        return {"model_version": "fixture-v1", "frame_count": count, "detection_count": 0,
+        return {"model_version": "fixture-v1", "frame_count": count, "processed_frames": (count + frame_stride - 1) // frame_stride,
+                "frame_stride": frame_stride, "render": "video", "detection_count": 0,
                 "video_path": str(destination), "detections_path": str(detections)}
+
+
+class BlockingStopPipeline(FakePipeline):
+    def __init__(self):
+        super().__init__()
+        self.started = threading.Event()
+
+    def infer_video(self, source, destination, *, frame_stride=3, render="video", progress=None, should_stop=None):
+        from drowning.api.inference import InferenceCancelled
+        self.started.set()
+        while not should_stop():
+            time.sleep(0.01)
+        raise InferenceCancelled("fixture stopped")
 
 
 class FakeDrive:
@@ -239,6 +269,9 @@ class MediaApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
         self.assertEqual(result["summary"]["frame_count"], 3)
+        self.assertEqual(result["summary"]["frame_stride"], 3)
+        jobs = request(self.app, "GET", "/api/v1/jobs").json()["jobs"]
+        self.assertEqual(next(job for job in jobs if job["id"] == result["job_id"])["progress"]["processed"], 1)
         output = request(self.app, "GET", result["files"]["annotated"])
         self.assertEqual(output.headers["content-type"], "video/webm")
         self.assertIn(b"V_VP8", output.content)
@@ -249,6 +282,56 @@ class MediaApiTests(unittest.TestCase):
         self.assertEqual(int(capture.get(cv2.CAP_PROP_FRAME_COUNT)), 3)
         capture.release()
         self.assertNotIn(str(self.root), json.dumps(result))
+
+    def test_browser_playable_webm_returns_source_copy_and_no_annotated_video(self):
+        source = self.root / "input.webm"
+        writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"VP80"), 10, (48, 40))
+        if not writer.isOpened(): self.skipTest("VP8 encoder is unavailable")
+        for _ in range(3): writer.write(np.zeros((40, 48, 3), dtype=np.uint8))
+        writer.release()
+        from drowning.api.media import browser_playable
+        if not browser_playable(source): self.skipTest("OpenCV did not identify the VP8 WebM fixture")
+        response = request(self.app, "POST", "/api/v1/test/video?frame_stride=2",
+                           headers={"Idempotency-Key": "video-overlay-001"},
+                           files={"file": (source.name, source.read_bytes(), "video/webm")})
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["summary"]["render"], "overlay")
+        self.assertIn("source", result["files"])
+        self.assertNotIn("annotated", result["files"])
+        source_result = request(self.app, "GET", result["files"]["source"])
+        self.assertEqual(source_result.content, source.read_bytes())
+        self.assertEqual(request(self.app, "POST", f"/api/v1/test/jobs/{result['job_id']}/stop").json()["message"], "Job đã xong")
+
+    def test_stop_cancels_running_video_and_releases_compute_slot(self):
+        self.pipeline = BlockingStopPipeline()
+        source = self.root / "stop-input.avi"
+        writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"MJPG"), 10, (48, 40))
+        for _ in range(3): writer.write(np.zeros((40, 48, 3), dtype=np.uint8))
+        writer.release()
+        key = "video-stop-001"
+
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://fixture") as client:
+                upload = asyncio.create_task(client.post("/api/v1/test/video", headers={"Idempotency-Key": key},
+                                                          files={"file": (source.name, source.read_bytes(), "video/x-msvideo")}))
+                self.assertTrue(await asyncio.to_thread(self.pipeline.started.wait, 10), "video inference did not start")
+                jobs = (await client.get("/api/v1/jobs")).json()["jobs"]
+                job = next(row for row in jobs if row["idempotency_key"] == key)
+                stopped = await client.post(f"/api/v1/test/jobs/{job['id']}/stop")
+                response = await upload
+                return job["id"], stopped, response
+
+        job_id, stopped, response = asyncio.run(run())
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(stopped.json()["state"], "cancellation_requested")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"]["state"], "cancelled")
+        with Session(self.engine) as session:
+            job = session.get(Job, UUID(job_id))
+            slot = session.get(ExecutionSlot, 1)
+            self.assertEqual(job.state, "cancelled")
+            self.assertIsNone(slot.job_id)
 
     def test_result_pointer_cannot_escape_result_cache(self):
         result = self.upload("image-upload-path").json()

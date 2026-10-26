@@ -24,8 +24,8 @@ DETECTIONS = [{"frame_index": i, "timestamp_ms": i * 100, "track_id": track, "la
 
 
 class VideoPipeline(FakePipeline):
-    def infer_video(self, source, destination):
-        result = super().infer_video(source, destination)
+    def infer_video(self, source, destination, **kwargs):
+        result = super().infer_video(source, destination, **kwargs)
         Path(result["detections_path"]).write_text(json.dumps({
             "model_version": "fixture", "detections": DETECTIONS, "scores_are_calibrated_probabilities": False}),
             encoding="utf-8")

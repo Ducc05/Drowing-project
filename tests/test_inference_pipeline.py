@@ -2,6 +2,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from drowning.api.inference import InferenceCancelled
+from drowning.api.media import browser_playable
 
 try:
     import cv2
@@ -24,6 +26,15 @@ except ImportError:
 class FixedPersonDetector:
     def detect(self, image):
         return [Box(4, 4, min(24, image.width - 1), min(26, image.height - 1), 0.9)]
+
+
+class CountingPersonDetector(FixedPersonDetector):
+    def __init__(self):
+        self.calls = 0
+
+    def detect(self, image):
+        self.calls += 1
+        return super().detect(image)
 
 
 class FakeClassifier(torch.nn.Module if torch is not None else object):
@@ -110,6 +121,68 @@ class InferencePipelineTests(unittest.TestCase):
             self.assertTrue(any(item["prediction_branch"] == "temporal" for item in records["detections"]))
             self.assertFalse(records["identity_verified"])
             self.assertFalse(records["scores_are_calibrated_probabilities"])
+
+    @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test video plumbing")
+    def test_video_stride_processes_only_selected_frames_and_reports_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.avi"
+            writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"MJPG"), 10, (32, 32))
+            for _ in range(10): writer.write(__import__("numpy").zeros((32, 32, 3), dtype="uint8"))
+            writer.release()
+            detector = CountingPersonDetector()
+            pipeline = PersonStateInference(FakeClassifier(), approved_test_manifest(), detector,
+                                             model_version="candidate-v1", input_size=32)
+            reports = []
+            result = pipeline.infer_video(source, root / "result.webm", frame_stride=3, progress=reports.append)
+            payload = json.loads(Path(result["detections_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["frame_count"], 10)
+            self.assertEqual(result["processed_frames"], 4)
+            self.assertEqual(detector.calls, 4)
+            self.assertEqual([row["frame_index"] for row in payload["detections"]], [0, 3, 6, 9])
+            self.assertEqual(payload["frame_stride"], 3)
+            self.assertEqual(reports[-1]["processed"], 4)
+            self.assertEqual(reports[-1]["eta_s"], 0)
+
+    @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test video plumbing")
+    def test_overlay_copies_playable_source_without_creating_encoded_video(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.webm"
+            writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"VP80"), 10, (32, 32))
+            if not writer.isOpened(): self.skipTest("VP8 encoder is unavailable")
+            for _ in range(3): writer.write(__import__("numpy").zeros((32, 32, 3), dtype="uint8"))
+            writer.release()
+            if not browser_playable(source): self.skipTest("OpenCV did not identify the VP8 WebM fixture")
+            pipeline = PersonStateInference(FakeClassifier(), approved_test_manifest(), FixedPersonDetector(),
+                                             model_version="candidate-v1", input_size=32)
+            result = pipeline.infer_video(source, root / "annotated.webm", frame_stride=3, render="overlay")
+            self.assertEqual(result["render"], "overlay")
+            self.assertTrue(Path(result["source_path"]).is_file())
+            self.assertFalse((root / "annotated.webm").exists())
+            payload = json.loads(Path(result["detections_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["processed_frames"], 1)
+            self.assertEqual(payload["render"], "overlay")
+
+    @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test cancellation")
+    def test_video_cancellation_removes_pending_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.avi"
+            writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"MJPG"), 10, (32, 32))
+            for _ in range(5): writer.write(__import__("numpy").zeros((32, 32, 3), dtype="uint8"))
+            writer.release()
+            pipeline = PersonStateInference(FakeClassifier(), approved_test_manifest(), FixedPersonDetector(),
+                                             model_version="candidate-v1", input_size=32)
+            checks = 0
+            def should_stop():
+                nonlocal checks
+                checks += 1
+                return checks > 1
+            with self.assertRaises(InferenceCancelled):
+                pipeline.infer_video(source, root / "result.webm", should_stop=should_stop)
+            self.assertEqual(list(root.glob("*.pending*")), [])
+            self.assertEqual(list(root.glob(".*.pending*")), [])
 
     @unittest.skipIf(torch is None, "install optional ML dependencies to test bundle guard")
     def test_inference_refuses_synthetic_smoke_bundle(self):

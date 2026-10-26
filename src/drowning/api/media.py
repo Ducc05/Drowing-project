@@ -12,6 +12,27 @@ from PIL import Image
 MAX_MEDIA_UPLOAD_BYTES = 512 * 1024 * 1024
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+_BROWSER_VIDEO_CODECS = {"avc1", "h264", "vp80", "vp90", "av01"}
+
+
+def browser_playable(path: str | Path) -> bool:
+    """Return whether a video uses a container/codec commonly supported by browsers."""
+    source = Path(path)
+    if source.suffix.casefold() not in {".mp4", ".webm"}:
+        return False
+    try:
+        import cv2
+        capture = cv2.VideoCapture(str(source))
+        try:
+            if not capture.isOpened():
+                return False
+            fourcc = int(capture.get(cv2.CAP_PROP_FOURCC))
+            codec = "".join(chr((fourcc >> (8 * index)) & 0xFF) for index in range(4)).casefold()
+            return codec in _BROWSER_VIDEO_CODECS
+        finally:
+            capture.release()
+    except (ImportError, OSError, ValueError):
+        return False
 
 
 def safe_local_root(path: str | Path) -> Path:

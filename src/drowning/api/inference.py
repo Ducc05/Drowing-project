@@ -18,6 +18,10 @@ class InferenceUnavailable(RuntimeError):
     pass
 
 
+class InferenceCancelled(RuntimeError):
+    pass
+
+
 def get_approved_model(session: Session, settings: Settings, *, pinned_model_id: UUID | None = None,
                        allow_candidate: bool = False) -> tuple[ModelVersion, Path, dict[str, Any]]:
     """Resolve the approved model, or an explicitly pinned version (a candidate only for evaluation)."""
@@ -106,10 +110,16 @@ def run_image_test(pipeline: Any, source: Path, output_dir: Path) -> dict[str, A
             "scores_are_calibrated_probabilities": False}
 
 
-def run_video_test(pipeline: Any, source: Path, output_dir: Path) -> dict[str, Any]:
+def run_video_test(pipeline: Any, source: Path, output_dir: Path, *, frame_stride: int = 3,
+                   render: str = "overlay", progress=None, should_stop=None) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=False)
     output_video = output_dir / "annotated.webm"
-    result = pipeline.infer_video(source, output_video)
-    return {**result, "files": {"annotated": output_video.name,
-                                "detections": Path(result["detections_path"]).name},
+    result = pipeline.infer_video(source, output_video, frame_stride=frame_stride, render=render,
+                                  progress=progress, should_stop=should_stop)
+    files = {"detections": Path(result["detections_path"]).name}
+    if result["render"] == "overlay":
+        files["source"] = Path(result["source_path"]).name
+    else:
+        files["annotated"] = output_video.name
+    return {**result, "files": files,
             "scores_are_calibrated_probabilities": False}

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -29,7 +29,8 @@ from drowning.api.inference import InferenceUnavailable, get_approved_model
 from drowning.inference.camera import (STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
                                         CameraStopUnconfirmed)
 from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
-from drowning.api.test_jobs import LocalInferenceFailed, LocalMediaTestJobs, MediaRequestConflict, MediaSlotBusy
+from drowning.api.test_jobs import (LocalInferenceCancelled, LocalInferenceFailed, LocalMediaTestJobs,
+                                    MediaRequestConflict, MediaSlotBusy)
 from drowning.data.registry import SourceConfigError, inspect_source, load_source, resolve_source_root, validate_source
 from drowning.db.models import Artifact, Job, JobEvent, ModelVersion
 from drowning.db.repositories import (StaleExecutionOwner, ModelReviewError,
@@ -161,6 +162,10 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     app.state.camera = (CameraService(session_factory, app_settings, inference_factory=inference_factory,
                                       capture_factory=camera_capture_factory)
                         if session_factory is not None else None)
+    app.state.media_jobs = (LocalMediaTestJobs(session_factory, app_settings,
+                                               inference_factory=inference_factory,
+                                               drive_factory=drive_factory)
+                            if session_factory is not None else None)
 
     if session_factory is not None and app_settings.supervisor_enabled:
         def default_drive():
@@ -197,9 +202,10 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
             yield session
 
     def get_media_jobs(request: Request, session: Session = Depends(get_session)):
-        return LocalMediaTestJobs(request.app.state.session_factory, request.app.state.settings,
-                                  inference_factory=request.app.state.inference_factory,
-                                  drive_factory=request.app.state.drive_factory)
+        service = request.app.state.media_jobs
+        if service is None:
+            raise HTTPException(status_code=503, detail="PostgreSQL is not configured")
+        return service
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -326,9 +332,9 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
                     "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES, "model_loaded": False}
 
     def execute_media(upload: UploadFile, modality: str, key: str, service: LocalMediaTestJobs,
-                      model_version_id: UUID | None = None):
+                      model_version_id: UUID | None = None, frame_stride: int = 3):
         try:
-            return service.submit(upload, modality, key, model_version_id)
+            return service.submit(upload, modality, key, model_version_id, frame_stride=frame_stride)
         except (InferenceUnavailable, StaleExecutionOwner) as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except MediaSlotBusy as exc:
@@ -337,6 +343,9 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
             raise HTTPException(status_code=409, detail=str(exc))
         except LocalInferenceFailed as exc:
             raise HTTPException(status_code=500, detail={"reason": str(exc), "job_id": str(exc.job_id)})
+        except LocalInferenceCancelled as exc:
+            raise HTTPException(status_code=409, detail={"reason": str(exc), "job_id": str(exc.job_id),
+                                                        "state": "cancelled"})
         finally:
             upload.file.close()
 
@@ -351,8 +360,9 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     def test_video(file: UploadFile = File(...),
                    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=200),
                    model_version_id: UUID | None = None,
+                   frame_stride: int = Query(3, ge=1, le=10),
                    service: LocalMediaTestJobs = Depends(get_media_jobs)):
-        return execute_media(file, "video", idempotency_key, service, model_version_id)
+        return execute_media(file, "video", idempotency_key, service, model_version_id, frame_stride)
 
     def get_camera(request: Request, session: Session = Depends(get_session)) -> CameraService:
         service = request.app.state.camera
@@ -513,6 +523,15 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Result synchronization remains pending ({type(exc).__name__})")
 
+    @app.post("/api/v1/test/jobs/{job_id}/stop")
+    def stop_local_test(job_id: UUID, service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        try:
+            return service.stop(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except MediaRequestConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
     def checkpoint_info(session: Session, model: ModelVersion) -> dict[str, Any] | None:
         artifact = session.get(Artifact, model.artifact_id) if model.artifact_id else None
         if artifact is None:
@@ -633,6 +652,8 @@ def _job_dict(job: Job) -> dict[str, Any]:
     payload = job.payload or {}
     return {"id": str(job.id), "job_type": job.job_type, "state": job.state,
             "mode": payload.get("mode") or payload.get("modality"), "executor": payload.get("executor"),
+            "progress": payload.get("progress"),
+            "frame_stride": payload.get("frame_stride"),
             "model_version_id": payload.get("model_version_id"), "evaluation": bool(payload.get("evaluation")),
             "phase": job.phase, "idempotency_key": job.idempotency_key,
             "owner_id": job.owner_id, "execution_token": job.execution_token,

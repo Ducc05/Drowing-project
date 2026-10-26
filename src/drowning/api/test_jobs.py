@@ -12,7 +12,8 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from drowning.api.inference import get_approved_model, load_approved_pipeline, run_image_test, run_video_test
+from drowning.api.inference import (InferenceCancelled, get_approved_model, load_approved_pipeline,
+                                    run_image_test, run_video_test)
 from drowning.api.media import persist_upload, safe_local_root
 from drowning.config import Settings
 from drowning.db.models import Artifact, Job, ModelVersion
@@ -39,6 +40,12 @@ class LocalInferenceFailed(RuntimeError):
         super().__init__(f"Local inference failed ({error_type}); see the stored job event.")
 
 
+class LocalInferenceCancelled(RuntimeError):
+    def __init__(self, job_id: UUID):
+        self.job_id = job_id
+        super().__init__(f"Local inference was cancelled (job {job_id}).")
+
+
 class LocalMediaTestJobs:
     def __init__(self, session_factory: sessionmaker, settings: Settings, *,
                  inference_factory: Callable[[ModelVersion, dict[str, Any], Path], Any] | None = None,
@@ -48,6 +55,7 @@ class LocalMediaTestJobs:
         self.inference_factory = inference_factory
         self.drive_factory = drive_factory
         self._fences: dict[UUID, tuple[str, int]] = {}
+        self._stop: set[UUID] = set()
         self.installation = installation_id(Path(settings.input_cache_dir).expanduser().resolve().parent)
 
     def _owned(self, session, job_id):
@@ -84,6 +92,7 @@ class LocalMediaTestJobs:
             owner, token = self._fences[job_id]
             release_execution_slot(session, job_id, owner, token,
                                    compute_stopped_confirmed=True)
+        self._fences.pop(job_id, None)
 
     def _drive(self):
         if self.drive_factory is not None:
@@ -118,7 +127,9 @@ class LocalMediaTestJobs:
         return result
 
     def submit(self, upload: UploadFile, modality: str, idempotency_key: str,
-               model_version_id: UUID | None = None) -> dict[str, Any]:
+               model_version_id: UUID | None = None, *, frame_stride: int = 3) -> dict[str, Any]:
+        if modality == "video" and not 1 <= frame_stride <= 10:
+            raise MediaRequestConflict("frame_stride must be between 1 and 10")
         if len(idempotency_key.strip()) < 8:
             raise MediaRequestConflict("Idempotency-Key must contain at least eight characters")
         temp_path, original_name, digest, size = persist_upload(upload, self.settings.input_cache_dir,
@@ -130,6 +141,9 @@ class LocalMediaTestJobs:
                     if (existing.job_type != "inference" or existing.payload.get("input_sha256") != digest
                             or existing.payload.get("modality") != modality):
                         raise MediaRequestConflict("Idempotency-Key is already associated with a different request")
+                    stored_stride = existing.payload.get("frame_stride")
+                    if modality == "video" and stored_stride is not None and int(stored_stride) != frame_stride:
+                        raise MediaRequestConflict("Idempotency-Key is already associated with a different frame_stride")
                     if existing.state != JobState.QUEUED.value:
                         return {**self.result(existing.id), "created": False}
                 pinned = (UUID(existing.payload["model_version_id"])
@@ -146,6 +160,7 @@ class LocalMediaTestJobs:
                                           payload={"executor": "local", "modality": modality,
                                                    "input_name": original_name, "input_sha256": digest,
                                                    "input_size_bytes": size, "model_version_id": str(model_record.id),
+                                                   "frame_stride": frame_stride if modality == "video" else None,
                                                    "installation_id": self.installation, "pid": os.getpid(),
                                                    "evaluation": model_version_id is not None,
                                                    "model_status_at_request": model_record.status})
@@ -192,8 +207,13 @@ class LocalMediaTestJobs:
             self._transition(job.id, JobState.RUNNING, "local_inference", "local_test_started")
             output_root = safe_local_root(self.settings.output_cache_dir)
             output_dir = output_root / "media-tests" / str(job.id) / f"attempt-{token}"
+            def report_progress(progress: dict[str, Any]) -> None:
+                self._payload(job.id, progress=progress)
+
             summary = (run_image_test(pipeline, source, output_dir) if modality == "image"
-                       else run_video_test(pipeline, source, output_dir))
+                       else run_video_test(pipeline, source, output_dir, frame_stride=frame_stride,
+                                           progress=report_progress,
+                                           should_stop=lambda: job.id in self._stop))
             summary = {key: value for key, value in summary.items()
                        if key not in {"video_path", "detections_path"}}
             self._payload(job.id, local_result_dir=str(output_dir), result_files=summary["files"],
@@ -202,7 +222,16 @@ class LocalMediaTestJobs:
             self._transition(job.id, JobState.VALIDATING, "validating_local_results", "local_test_compute_stopped")
             for role in summary["files"]:
                 self.result_file(job.id, role)
+        except InferenceCancelled:
+            try:
+                self._transition(job.id, JobState.CANCELLED, "cancelled", "local_test_cancelled")
+            finally:
+                self._release(job.id)
+                self._stop.discard(job.id)
+            raise LocalInferenceCancelled(job.id)
         except StaleExecutionOwner:
+            self._fences.pop(job.id, None)
+            self._stop.discard(job.id)
             raise
         except Exception as exc:
             self._transition(job.id, JobState.FAILED, "local_inference_failed", "local_test_failed",
@@ -217,6 +246,7 @@ class LocalMediaTestJobs:
                 self._payload(job.id, drive_result_ids=drive_ids, result_storage="local_and_drive")
                 self._transition(job.id, JobState.COMPLETED, "complete", "local_results_synced")
             except StaleExecutionOwner:
+                self._fences.pop(job.id, None)
                 raise
             except Exception as exc:
                 self._payload(job.id, result_sync_error=type(exc).__name__)
@@ -239,6 +269,33 @@ class LocalMediaTestJobs:
                 "result_sync_error": job.payload.get("result_sync_error"),
                 "summary": job.payload.get("result_summary"),
                 "files": {role: f"/api/v1/jobs/{job.id}/results/{role}" for role in files}}
+
+    def stop(self, job_id: UUID) -> dict[str, Any]:
+        job = self._job(job_id)
+        if job.job_type != "inference":
+            raise MediaRequestConflict("Only local inference jobs can be stopped here")
+        if job.state in {JobState.COLLECTING.value, JobState.VALIDATING.value, JobState.SYNCING.value,
+                         JobState.COMPLETED.value, JobState.SYNC_PENDING.value}:
+            return {"job_id": str(job.id), "state": job.state, "message": "Job đã xong"}
+        if job.state == JobState.CANCELLED.value:
+            return {"job_id": str(job.id), "state": job.state, "message": "Job đã hủy"}
+        if job.state == JobState.RUNNING.value:
+            self._stop.add(job_id)
+            try:
+                self._transition(job_id, JobState.CANCELLATION_REQUESTED, "cancellation_requested",
+                                 "local_test_stop_requested")
+            except Exception:
+                current = self._job(job_id)
+                if current.state not in {JobState.COLLECTING.value, JobState.VALIDATING.value, JobState.SYNCING.value,
+                                         JobState.COMPLETED.value, JobState.SYNC_PENDING.value, JobState.CANCELLED.value}:
+                    raise
+                self._stop.discard(job_id)
+                return {"job_id": str(job.id), "state": current.state, "message": "Job đã xong"}
+            return {"job_id": str(job.id), "state": JobState.CANCELLATION_REQUESTED.value,
+                    "message": "Đang dừng job"}
+        if job.state == JobState.CANCELLATION_REQUESTED.value:
+            return {"job_id": str(job.id), "state": job.state, "message": "Đang dừng job"}
+        raise MediaRequestConflict(f"Job hiện không thể dừng (state={job.state})")
 
     def result_file(self, job_id: UUID, role: str) -> Path:
         job = self._job(job_id)
@@ -283,4 +340,6 @@ class LocalMediaTestJobs:
             self._transition(job_id, JobState.SYNC_PENDING, "local_results_sync_pending",
                              "local_results_sync_failed", {"error_type": type(exc).__name__})
             raise
+        finally:
+            self._fences.pop(job_id, None)
         return self.result(job_id)

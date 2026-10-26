@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 
 from drowning.data.labels import CANONICAL_LABELS
+from drowning.api.inference import InferenceCancelled
 from drowning.inference.aggregation import TrackAggregator
 from drowning.inference.buffer import FrameCrop, TemporalWindowBuffer
 from drowning.inference.detector import PersonDetector
@@ -154,7 +156,11 @@ class PersonStateInference:
         for record in records:
             x1, y1, x2, y2 = (int(value) for value in record["bbox_xyxy"])
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (101, 207, 184), 2)
-            caption = f"{record['track_id']} | {record.get('label') or 'unknown'} | {record['prediction_branch']}"
+            scores = record.get("class_scores")
+            label_index = CLASS_KEYS.index(record["label"]) if record.get("label") in CLASS_KEYS else -1
+            confidence = scores[label_index] if scores and 0 <= label_index < len(scores) else None
+            score_text = f" | {confidence * 100:.0f}%" if confidence is not None else ""
+            caption = f"{record['track_id']} | {record.get('label') or 'unknown'}{score_text} | {record['prediction_branch']}"
             if record.get("alert"):
                 caption += " | ALERT"
             cv2.putText(annotated, caption, (x1, max(18, y1 - 7)), cv2.FONT_HERSHEY_SIMPLEX,
@@ -162,7 +168,10 @@ class PersonStateInference:
         return annotated
 
     @torch.inference_mode()
-    def infer_video(self, video_path: Path, output_video: Path, *, max_frames: int | None = None) -> dict[str, Any]:
+    def infer_video(self, video_path: Path, output_video: Path, *, max_frames: int | None = None,
+                    frame_stride: int = 3, render: str = "video",
+                    progress: Callable[[dict[str, Any]], None] | None = None,
+                    should_stop: Callable[[], bool] | None = None) -> dict[str, Any]:
         try:
             import cv2
         except ImportError as exc:
@@ -170,6 +179,10 @@ class PersonStateInference:
         source = video_path.resolve()
         target = _protect_output(output_video)
         results_path = target.with_suffix(".detections.json")
+        if not 1 <= frame_stride <= 10:
+            raise ValueError("frame_stride must be between 1 and 10")
+        if render not in {"video", "overlay"}:
+            raise ValueError("render must be 'video' or 'overlay'")
         if not source.is_file():
             raise FileNotFoundError(source)
         if target.exists() or results_path.exists():
@@ -189,51 +202,108 @@ class PersonStateInference:
             raise ValueError("Input video has no usable FPS metadata")
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if render == "overlay":
+            from drowning.api.media import browser_playable
+            if not browser_playable(source):
+                render = "video"
         codec = "VP80" if target.suffix.casefold() == ".webm" else "mp4v"
-        writer = cv2.VideoWriter(str(temp_video), cv2.VideoWriter_fourcc(*codec), fps, (width, height))
-        if not writer.isOpened():
-            capture.release()
-            writer.release()
-            temp_video.unlink(missing_ok=True)
-            raise ValueError("Unable to create output video writer")
+        writer = None
+        if render == "video":
+            writer = cv2.VideoWriter(str(temp_video), cv2.VideoWriter_fourcc(*codec), fps, (width, height))
+            if not writer.isOpened():
+                capture.release()
+                writer.release()
+                temp_video.unlink(missing_ok=True)
+                raise ValueError("Unable to create output video writer")
         detections_json: list[dict[str, Any]] = []
-        frame_index, last_timestamp = 0, -1
+        frame_index, processed_frames, last_timestamp = 0, 0, -1
+        total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+        started = time.monotonic()
+        last_progress = started
         timestamp_fallback_used = False
         try:
             while max_frames is None or frame_index < max_frames:
-                ok, bgr = capture.read()
+                if should_stop is not None and should_stop():
+                    raise InferenceCancelled("Video inference was cancelled")
+                ok = capture.grab()
                 if not ok:
                     break
-                frame_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
-                if frame_ms <= last_timestamp:
-                    frame_ms = frame_index * 1000.0 / fps
-                    timestamp_fallback_used = True
-                timestamp = max(0, int(round(frame_ms)))
-                last_timestamp = timestamp
-                image = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-                records = self.process_frame(image, timestamp, frame_index)
-                detections_json.extend(records)
-                annotated = self.draw_annotations(bgr, records)
-                writer.write(annotated)
+                if frame_index % frame_stride == 0:
+                    retrieved, bgr = capture.retrieve()
+                    if not retrieved:
+                        break
+                    frame_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
+                    if frame_ms <= last_timestamp:
+                        frame_ms = frame_index * 1000.0 / fps
+                        timestamp_fallback_used = True
+                    timestamp = max(0, int(round(frame_ms)))
+                    last_timestamp = timestamp
+                    image = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+                    records = self.process_frame(image, timestamp, frame_index)
+                    detections_json.extend(records)
+                    if writer is not None:
+                        writer.write(self.draw_annotations(bgr, records))
+                    processed_frames += 1
+                    now = time.monotonic()
+                    if progress is not None and (processed_frames % 20 == 0 or now - last_progress >= 2):
+                        total = total_frames or frame_index + 1
+                        estimated_processed = (total + frame_stride - 1) // frame_stride
+                        elapsed = now - started
+                        rate = processed_frames / elapsed if elapsed > 0 else 0
+                        progress({"frame": frame_index + 1, "total": total, "processed": processed_frames,
+                                  "elapsed_s": round(elapsed, 2),
+                                  "eta_s": round(max(0, estimated_processed - processed_frames) / rate, 2) if rate else None})
+                        last_progress = now
+                elif writer is not None:
+                    # Keep the legacy rendered video at its original duration; skipped frames are copied
+                    # without color conversion, detection, classification, tracking, or annotation.
+                    retrieved, bgr = capture.retrieve()
+                    if not retrieved:
+                        break
+                    writer.write(bgr)
                 frame_index += 1
         except Exception:
             capture.release()
-            writer.release()
+            if writer is not None:
+                writer.release()
             temp_video.unlink(missing_ok=True)
+            results_path.unlink(missing_ok=True)
             raise
         finally:
             capture.release()
-            writer.release()
+            if writer is not None:
+                writer.release()
         if frame_index == 0:
             temp_video.unlink(missing_ok=True)
             raise ValueError("Input video contains no decodable frames")
+        if progress is not None:
+            elapsed = time.monotonic() - started
+            progress({"frame": frame_index, "total": total_frames or frame_index, "processed": processed_frames,
+                      "elapsed_s": round(elapsed, 2), "eta_s": 0})
+        if render == "overlay":
+            import shutil
+            source_target = target.parent / f"source{source.suffix.casefold()}"
+            if source_target.exists():
+                raise FileExistsError("Refusing to overwrite an existing source copy")
+            try:
+                shutil.copy2(source, source_target)
+            except Exception:
+                source_target.unlink(missing_ok=True)
+                raise
         payload = {
             "schema_version": 1,
             "model_version": self.model_version,
             "video_file": source.name,
             "frame_count": frame_index,
+            "processed_frames": processed_frames,
+            "frame_stride": frame_stride,
+            "width": width,
+            "height": height,
             "detection_count": len(detections_json),
             "fps_metadata": fps,
+            "max_gap_ms": 1500,
+            "max_gap_ms": 1500,
+            "render": render,
             "timestamp_source": "opencv_container_position_ms" if not timestamp_fallback_used else "opencv_with_frame_index_fallback",
             "timestamp_quality": "fallback_used" if timestamp_fallback_used else "container_position_ms",
             "tracker": self.tracker.name,
@@ -243,14 +313,20 @@ class PersonStateInference:
         }
         temp_results.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
-            temp_video.rename(target)
+            if writer is not None:
+                temp_video.rename(target)
             temp_results.rename(results_path)
         except Exception:
             target.unlink(missing_ok=True)
             temp_video.unlink(missing_ok=True)
             temp_results.unlink(missing_ok=True)
+            if render == "overlay":
+                source_target.unlink(missing_ok=True)
             raise
-        return {"video_path": str(target), "detections_path": str(results_path), "frame_count": frame_index,
+        return {"video_path": str(target) if render == "video" else str(source_target),
+                "source_path": str(source_target) if render == "overlay" else None,
+                "detections_path": str(results_path), "frame_count": frame_index,
+                "processed_frames": processed_frames, "frame_stride": frame_stride, "render": render,
                 "detection_count": len(detections_json), "model_version": self.model_version,
                 "timestamp_quality": payload["timestamp_quality"]}
 
