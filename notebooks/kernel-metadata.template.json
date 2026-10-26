@@ -1,0 +1,12 @@
+{
+  "id": "USERNAME/drowning-temporal",
+  "title": "Drowning Temporal",
+  "code_file": "Drowning_Temporal_Kaggle.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": []
+}

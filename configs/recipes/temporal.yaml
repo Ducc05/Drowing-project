@@ -1,0 +1,24 @@
+schema_version: 1
+recipe_id: temporal-gru-v1
+model_family: drowning-person-temporal-v1
+stage: temporal
+class_keys: [drowning, swimming, out_of_water]
+sampling:
+  sequence_length: 16
+  sample_period_ms: 250
+  max_track_gap_ms: 1000
+  min_valid_ratio: 0.75
+  causal: true
+  anchor: last_valid_frame
+  padding: mask_invalid
+model:
+  encoder: mobilenet_v3_small
+  temporal_head: gru_cell_unidirectional
+  hidden_size: 256
+training:
+  optimizer: adamw
+  learning_rate: 0.0001
+  batch_size: 8
+  image_auxiliary_loss_weight: 0.2
+  seed: 20261026
+notes: Starting values only. Benchmark sequence length, sampling and gap on reviewed video tracks before candidate training.

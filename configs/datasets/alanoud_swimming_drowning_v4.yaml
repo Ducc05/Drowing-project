@@ -1,0 +1,35 @@
+schema_version: 1
+source_id: alanoud_swimming_drowning
+source_version: "4"
+format: yolo_detection
+modality: image
+annotation_scope: person_bbox
+provider:
+  kind: roboflow_export
+  workspace: alanoud
+  project: swimming-and-drowning-1jtbi
+  version: 4
+provenance:
+  url: https://universe.roboflow.com/alanoud/swimming-and-drowning-1jtbi/dataset/4
+  license_declared: CC BY 4.0
+  license_verified_for_all_media: false
+paths:
+  root_env: ALANOUD_V4_DATA_ROOT
+  class_list: data.yaml:names
+source_labels:
+  read_ids_from_class_list: true
+  expected_names: [Drowning, Swimming, out of water]
+mapping:
+  Drowning: {action: map, target: drowning}
+  Swimming: {action: map, target: swimming}
+  out of water: {action: map, target: out_of_water}
+mapping_review:
+  status: pending_sample_review
+  sample_review_required: true
+grouping:
+  metadata_file: null
+  missing_source_video_policy: report_unknown
+usage:
+  image_training: after_review
+  temporal_training: false
+  clean_holdout_eligible: false

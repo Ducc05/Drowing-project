@@ -1,0 +1,12 @@
+{
+  "report_structure": "passed",
+  "local_links_checked": 23,
+  "actual_secret_values_present": false,
+  "regression": "107/107 passed; 0 skipped",
+  "real_postgres_tests": 6,
+  "real_http_checks": 15,
+  "scan_seconds": 5.99,
+  "source_inventory_files": 19997,
+  "source_metadata_unchanged": true,
+  "browser_render_verified": false
+}

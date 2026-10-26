@@ -1,0 +1,29 @@
+.env
+.env.*
+!.env.example
+secrets/
+local-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+*.pt
+*.pth
+*.onnx
+*.mp4
+*.avi
+*.zip
+web/node_modules/
+web/dist/
+.neon
+node_modules/
+
+# Neon CLI tooling at the project root
+/node_modules/
+
+# local run logs
+reports/*.log

@@ -1,0 +1,9 @@
+schema_version: 1
+ontology_id: person_water_state
+ontology_version: 1
+classes:
+  - {id: 0, key: drowning, display_name: Đuối nước}
+  - {id: 1, key: swimming, display_name: Bình thường trong nước}
+  - {id: 2, key: out_of_water, display_name: Ngoài nước}
+unmapped_policy: review
+uncertainty_is_training_class: false

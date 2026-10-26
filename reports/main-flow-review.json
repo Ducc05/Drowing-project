@@ -1,0 +1,1361 @@
+{
+  "generated_at_utc": "2026-10-25T19:41:38.977235+00:00",
+  "workspace": "D:\\AI\\DrowningProject",
+  "acceptance": "local technical flow verified; model/cloud/user acceptance pending",
+  "regression": {
+    "generated_at_utc": "2026-10-25T19:40:22.457572+00:00",
+    "command": ".\\.venv\\Scripts\\python scripts\\run_regression.py",
+    "tests_run": 107,
+    "passed": 107,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "duration_seconds": 16.28,
+    "tests": [
+      {
+        "test": "test_adapters.AdapterTests.test_cli_convert_uses_env_root_and_writes_derived_jsonl",
+        "status": "passed",
+        "duration_seconds": 0.0752
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_coco_uses_category_ids_and_preserves_ignore_and_review",
+        "status": "passed",
+        "duration_seconds": 0.0304
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_crop_preview_is_deterministic_and_never_training_eligible_when_mapping_pending",
+        "status": "passed",
+        "duration_seconds": 0.0517
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_pascal_voc_conversion_applies_one_based_inclusive_coordinates_and_flags",
+        "status": "passed",
+        "duration_seconds": 0.033
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_refuses_output_inside_raw_root_and_overwrite",
+        "status": "passed",
+        "duration_seconds": 0.0315
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_training_crop_requires_reviewed_mapping_and_verified_group_split",
+        "status": "passed",
+        "duration_seconds": 0.0536
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_voc_scan_and_converter_reject_out_of_image_coordinates",
+        "status": "passed",
+        "duration_seconds": 0.0155
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_yolo_conversion_keeps_source_label_and_unknown_as_review",
+        "status": "passed",
+        "duration_seconds": 0.0182
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_yolo_rejects_segmentation_rows_and_bbox_outside_image",
+        "status": "passed",
+        "duration_seconds": 0.0362
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_yolo_scan_counts_by_split_and_mapping_without_mutating_source",
+        "status": "passed",
+        "duration_seconds": 0.0137
+      },
+      {
+        "test": "test_adapters.AdapterTests.test_yolo_scan_reports_invalid_numeric_bboxes_and_rejects_ambiguous_images",
+        "status": "passed",
+        "duration_seconds": 0.0131
+      },
+      {
+        "test": "test_api.ApiTests.test_health_and_config_status_work_without_database_and_do_not_expose_secrets",
+        "status": "passed",
+        "duration_seconds": 0.1292
+      },
+      {
+        "test": "test_api.ApiTests.test_job_http_flow_uses_idempotency_and_event_history",
+        "status": "passed",
+        "duration_seconds": 0.1295
+      },
+      {
+        "test": "test_audit.AuditTests.test_cli_audit_can_write_report_without_overwriting_input",
+        "status": "passed",
+        "duration_seconds": 0.0406
+      },
+      {
+        "test": "test_audit.AuditTests.test_cli_audit_returns_nonzero_for_invalid_input",
+        "status": "passed",
+        "duration_seconds": 0.023
+      },
+      {
+        "test": "test_audit.AuditTests.test_detects_cross_source_exact_duplicate_with_conflicting_box_labels",
+        "status": "passed",
+        "duration_seconds": 0.0052
+      },
+      {
+        "test": "test_audit.AuditTests.test_reports_dangling_media_reference_invalid_bbox_and_json",
+        "status": "passed",
+        "duration_seconds": 0.0036
+      },
+      {
+        "test": "test_audit.AuditTests.test_reports_duplicates_that_cross_original_export_splits",
+        "status": "passed",
+        "duration_seconds": 0.0195
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_candidate_archive_rejects_extra_secret_file",
+        "status": "passed",
+        "duration_seconds": 0.4701
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_collect_exact_output_registers_candidate_and_releases_confirmed_compute",
+        "status": "passed",
+        "duration_seconds": 0.7482
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_drive_failure_becomes_sync_pending_then_idempotent_retry",
+        "status": "passed",
+        "duration_seconds": 0.9075
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_exact_candidate_archive_verifies_bundle_and_holdout_contract",
+        "status": "passed",
+        "duration_seconds": 0.5539
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_stale_upload_receipt_cannot_register_artifact_or_candidate",
+        "status": "passed",
+        "duration_seconds": 0.7028
+      },
+      {
+        "test": "test_candidate_sync.CandidateSyncTests.test_unverified_drive_receipt_cannot_publish_candidate",
+        "status": "passed",
+        "duration_seconds": 0.6756
+      },
+      {
+        "test": "test_config.ConfigTests.test_config_distinguishes_bundle_path_from_real_approved_bundle",
+        "status": "passed",
+        "duration_seconds": 0.0037
+      },
+      {
+        "test": "test_config.ConfigTests.test_config_status_never_prints_database_secret",
+        "status": "passed",
+        "duration_seconds": 0.0102
+      },
+      {
+        "test": "test_config.ConfigTests.test_env_file_fills_missing_values_but_preserves_process_environment",
+        "status": "passed",
+        "duration_seconds": 0.0061
+      },
+      {
+        "test": "test_config.ConfigTests.test_settings_reject_local_training_and_non_kaggle_executor",
+        "status": "passed",
+        "duration_seconds": 0.0004
+      },
+      {
+        "test": "test_cvat_adapter.CVATAdapterTests.test_cvat_scan_counts_state_attributes_and_refuses_unverified_cfr",
+        "status": "passed",
+        "duration_seconds": 0.032
+      },
+      {
+        "test": "test_cvat_adapter.CVATAdapterTests.test_cvat_tracks_keep_time_identity_outside_and_create_causal_windows",
+        "status": "passed",
+        "duration_seconds": 0.0431
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_approval_requires_verified_drive_artifact_then_atomically_updates_pointer",
+        "status": "passed",
+        "duration_seconds": 0.0285
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_database_readiness_requires_the_expected_migration_revision",
+        "status": "passed",
+        "duration_seconds": 0.0082
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_idempotency_key_reuses_same_job",
+        "status": "passed",
+        "duration_seconds": 0.0119
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_job_transition_order_is_enforced",
+        "status": "passed",
+        "duration_seconds": 0.0076
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_reject_keeps_candidate_record",
+        "status": "passed",
+        "duration_seconds": 0.0146
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_singleton_slot_fencing_and_confirmed_release",
+        "status": "passed",
+        "duration_seconds": 0.0285
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_stale_owner_cannot_release_reclaimed_slot",
+        "status": "passed",
+        "duration_seconds": 0.0146
+      },
+      {
+        "test": "test_db_jobs.JobPersistenceContractTests.test_stale_worker_cannot_transition_or_append_event",
+        "status": "passed",
+        "duration_seconds": 0.0148
+      },
+      {
+        "test": "test_drive_adapter.DriveAdapterTests.test_interrupted_upload_is_unconfirmed_and_not_silently_retried",
+        "status": "passed",
+        "duration_seconds": 0.0051
+      },
+      {
+        "test": "test_drive_adapter.DriveAdapterTests.test_refuses_existing_or_protected_download_targets",
+        "status": "passed",
+        "duration_seconds": 0.0029
+      },
+      {
+        "test": "test_drive_adapter.DriveAdapterTests.test_resumable_upload_reconciles_idempotently_and_download_verifies",
+        "status": "passed",
+        "duration_seconds": 0.0137
+      },
+      {
+        "test": "test_grouping.GroupSplitTests.test_manual_holdout_is_preserved_for_entire_group",
+        "status": "passed",
+        "duration_seconds": 0.0003
+      },
+      {
+        "test": "test_grouping.GroupSplitTests.test_unknown_source_group_and_missing_holdout_block_split",
+        "status": "passed",
+        "duration_seconds": 0.0002
+      },
+      {
+        "test": "test_grouping.GroupSplitTests.test_verified_groups_and_exact_duplicates_never_cross_splits",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_inference_pipeline.InferencePipelineTests.test_image_inference_keeps_each_person_detection_and_uses_fixed_class_order",
+        "status": "passed",
+        "duration_seconds": 0.0015
+      },
+      {
+        "test": "test_inference_pipeline.InferencePipelineTests.test_inference_refuses_synthetic_smoke_bundle",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_inference_pipeline.InferencePipelineTests.test_iou_tracker_reuses_track_id_and_expires_missing_tracks",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_inference_pipeline.InferencePipelineTests.test_person_crop_and_tensor_follow_rgb_normalization_contract",
+        "status": "passed",
+        "duration_seconds": 0.0007
+      },
+      {
+        "test": "test_inference_pipeline.InferencePipelineTests.test_video_pipeline_writes_annotated_video_and_marks_warmup",
+        "status": "passed",
+        "duration_seconds": 0.0439
+      },
+      {
+        "test": "test_kaggle_adapter.KaggleAdapterTests.test_exact_version_output_collection_and_path_safety",
+        "status": "passed",
+        "duration_seconds": 0.0033
+      },
+      {
+        "test": "test_kaggle_adapter.KaggleAdapterTests.test_invalid_ref_and_missing_cli_are_clear",
+        "status": "passed",
+        "duration_seconds": 0.003
+      },
+      {
+        "test": "test_kaggle_adapter.KaggleAdapterTests.test_push_passes_argument_array_and_requires_private_metadata",
+        "status": "passed",
+        "duration_seconds": 0.0133
+      },
+      {
+        "test": "test_kaggle_adapter.KaggleAdapterTests.test_push_timeout_is_remote_unconfirmed_and_never_retried",
+        "status": "passed",
+        "duration_seconds": 0.0055
+      },
+      {
+        "test": "test_kaggle_dispatch.KaggleDispatchTests.test_candidate_dispatch_requires_reviewed_preflight_before_claim",
+        "status": "passed",
+        "duration_seconds": 0.0161
+      },
+      {
+        "test": "test_kaggle_dispatch.KaggleDispatchTests.test_dispatch_keeps_slot_until_exact_remote_status_is_known",
+        "status": "passed",
+        "duration_seconds": 0.0392
+      },
+      {
+        "test": "test_kaggle_dispatch.KaggleDispatchTests.test_kernel_directory_must_be_private_and_mode_matched",
+        "status": "passed",
+        "duration_seconds": 0.0302
+      },
+      {
+        "test": "test_kaggle_dispatch.KaggleDispatchTests.test_stale_push_receipt_cannot_overwrite_new_execution_owner",
+        "status": "passed",
+        "duration_seconds": 0.0329
+      },
+      {
+        "test": "test_kaggle_dispatch.KaggleDispatchTests.test_timed_out_push_is_not_retried_or_reconciled_to_latest",
+        "status": "passed",
+        "duration_seconds": 0.0434
+      },
+      {
+        "test": "test_kaggle_materializer.KaggleMaterializerTests.test_materializes_private_mode_matched_kernel_without_remote_action",
+        "status": "passed",
+        "duration_seconds": 0.0606
+      },
+      {
+        "test": "test_kaggle_materializer.KaggleMaterializerTests.test_refuses_missing_ref_invalid_mode_and_protected_destination",
+        "status": "passed",
+        "duration_seconds": 0.0013
+      },
+      {
+        "test": "test_logging_utils.LoggingRedactionTests.test_filter_redacts_message_and_formatted_arguments",
+        "status": "passed",
+        "duration_seconds": 0.0002
+      },
+      {
+        "test": "test_logging_utils.LoggingRedactionTests.test_redacts_database_passwords_and_inline_tokens",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_busy_slot_preserves_queued_input_and_can_resume_same_request",
+        "status": "passed",
+        "duration_seconds": 0.136
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_compute_failure_releases_slot_and_records_failed_job",
+        "status": "passed",
+        "duration_seconds": 0.2808
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_drive_sync_retry_does_not_repeat_inference",
+        "status": "passed",
+        "duration_seconds": 0.1497
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_exif_orientation_is_applied_before_annotated_output",
+        "status": "passed",
+        "duration_seconds": 0.1655
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_image_upload_result_download_and_idempotency",
+        "status": "passed",
+        "duration_seconds": 0.2169
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_invalid_media_and_missing_approved_model_are_explicit",
+        "status": "passed",
+        "duration_seconds": 0.1488
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_result_pointer_cannot_escape_result_cache",
+        "status": "passed",
+        "duration_seconds": 0.1254
+      },
+      {
+        "test": "test_media_api.MediaApiTests.test_video_upload_returns_decodable_annotated_media_and_json",
+        "status": "passed",
+        "duration_seconds": 0.1434
+      },
+      {
+        "test": "test_migrations.MigrationSmokeTests.test_initial_migration_round_trip_on_temporary_sqlite_schema_only",
+        "status": "passed",
+        "duration_seconds": 0.2078
+      },
+      {
+        "test": "test_ml_model.ModelContractTests.test_bundle_checksum_is_verified_before_loading",
+        "status": "passed",
+        "duration_seconds": 0.1188
+      },
+      {
+        "test": "test_ml_model.ModelContractTests.test_gradient_smoke_does_not_run_optimizer",
+        "status": "passed",
+        "duration_seconds": 0.1076
+      },
+      {
+        "test": "test_ml_model.ModelContractTests.test_image_and_temporal_shapes_and_causal_prefix",
+        "status": "passed",
+        "duration_seconds": 0.0712
+      },
+      {
+        "test": "test_ml_model.ModelContractTests.test_invalid_frames_do_not_change_recurrent_state",
+        "status": "passed",
+        "duration_seconds": 0.0835
+      },
+      {
+        "test": "test_ml_model.ModelContractTests.test_smoke_bundle_round_trip_is_labeled_and_not_approvable",
+        "status": "passed",
+        "duration_seconds": 0.1889
+      },
+      {
+        "test": "test_model_sync.ApprovedModelSyncTests.test_candidate_approve_sync_upload_download_entire_flow",
+        "status": "passed",
+        "duration_seconds": 0.947
+      },
+      {
+        "test": "test_model_sync.ApprovedModelSyncTests.test_candidate_cannot_be_installed_as_approved",
+        "status": "passed",
+        "duration_seconds": 0.5865
+      },
+      {
+        "test": "test_model_sync.ApprovedModelSyncTests.test_interrupted_or_wrong_checksum_download_preserves_existing_versions",
+        "status": "passed",
+        "duration_seconds": 0.7964
+      },
+      {
+        "test": "test_notebook_builder.KaggleNotebookBuilderTests.test_embedded_source_bundle_excludes_local_data_and_credentials",
+        "status": "passed",
+        "duration_seconds": 0.021
+      },
+      {
+        "test": "test_notebook_builder.KaggleNotebookBuilderTests.test_kernel_template_is_private_and_gpu_enabled",
+        "status": "passed",
+        "duration_seconds": 0.0005
+      },
+      {
+        "test": "test_notebook_builder.KaggleNotebookBuilderTests.test_notebook_code_compiles_and_defaults_to_prepare_only",
+        "status": "passed",
+        "duration_seconds": 0.0382
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_expired_lease_does_not_release_unconfirmed_compute",
+        "status": "passed",
+        "duration_seconds": 0.2248
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_real_migration_head_and_singleton_seed",
+        "status": "passed",
+        "duration_seconds": 0.155
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_simultaneous_first_model_approvals_serialize_registry_pointer",
+        "status": "passed",
+        "duration_seconds": 1.8718
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_stale_token_cannot_publish_state_on_real_postgresql",
+        "status": "passed",
+        "duration_seconds": 0.2587
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_two_processes_compete_for_one_global_compute_slot",
+        "status": "passed",
+        "duration_seconds": 1.7965
+      },
+      {
+        "test": "test_postgres_integration.PostgreSQLIntegrationTests.test_two_processes_create_one_idempotent_job",
+        "status": "passed",
+        "duration_seconds": 1.7265
+      },
+      {
+        "test": "test_registry.RegistryTests.test_mapping_is_exact_after_typographic_normalization",
+        "status": "passed",
+        "duration_seconds": 0.0002
+      },
+      {
+        "test": "test_registry.RegistryTests.test_reads_non_contiguous_coco_category_ids",
+        "status": "passed",
+        "duration_seconds": 0.0068
+      },
+      {
+        "test": "test_registry.RegistryTests.test_reads_yolo_names_in_declared_order",
+        "status": "passed",
+        "duration_seconds": 0.0084
+      },
+      {
+        "test": "test_registry.RegistryTests.test_rejects_class_list_path_traversal",
+        "status": "passed",
+        "duration_seconds": 0.0017
+      },
+      {
+        "test": "test_registry.RegistryTests.test_rejects_invalid_map_target_and_normalized_duplicate",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_registry.RegistryTests.test_source_contract_and_mapping_report",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_temporal_buffer.TemporalBufferTests.test_buffer_uses_fixed_sampling_and_waits_for_full_window",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_temporal_buffer.TemporalBufferTests.test_rejects_invalid_sequence_contract",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_temporal_buffer.TemporalBufferTests.test_resets_on_track_gap_scene_or_model_change",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_temporal_buffer.TemporalBufferTests.test_tracks_have_independent_windows_and_require_monotonic_timestamps",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_training_contracts.TrainingContractTests.test_classification_metrics_report_per_class_recall_and_macro_f1",
+        "status": "passed",
+        "duration_seconds": 0.0001
+      },
+      {
+        "test": "test_training_contracts.TrainingContractTests.test_image_and_temporal_losses_ignore_unsupervised_anchors",
+        "status": "passed",
+        "duration_seconds": 0.0026
+      },
+      {
+        "test": "test_training_contracts.TrainingContractTests.test_rejects_temporal_batch_without_supervised_anchors",
+        "status": "passed",
+        "duration_seconds": 0.0009
+      },
+      {
+        "test": "test_training_datasets.TrainingDatasetTests.test_image_dataset_requires_eligible_manifest_and_validates_crop_checksum",
+        "status": "passed",
+        "duration_seconds": 0.041
+      },
+      {
+        "test": "test_training_datasets.TrainingDatasetTests.test_temporal_dataset_decodes_only_verified_person_frames",
+        "status": "passed",
+        "duration_seconds": 0.0274
+      },
+      {
+        "test": "test_training_datasets.TrainingDatasetTests.test_temporal_dataset_rejects_unverified_group_and_identity",
+        "status": "passed",
+        "duration_seconds": 0.0169
+      },
+      {
+        "test": "test_windows.TemporalWindowTests.test_builds_fixed_length_causal_windows_for_one_verified_track",
+        "status": "passed",
+        "duration_seconds": 0.0168
+      },
+      {
+        "test": "test_windows.TemporalWindowTests.test_unknown_video_group_blocks_training_even_when_window_is_valid",
+        "status": "passed",
+        "duration_seconds": 0.0139
+      },
+      {
+        "test": "test_windows.TemporalWindowTests.test_unverified_identity_and_image_only_source_are_blocked",
+        "status": "passed",
+        "duration_seconds": 0.0517
+      }
+    ],
+    "real_training_run": false,
+    "live_drive_or_kaggle_run": false
+  },
+  "commands": [
+    {
+      "command": "\"C:\\Program Files\\nodejs\\npm.cmd\" run build",
+      "exit_code": 0,
+      "expected_exit_codes": [
+        0
+      ],
+      "passed": true,
+      "duration_seconds": 3.252,
+      "stdout": "> web@0.0.0 build\n> tsc -b && vite build\n\nvite v8.3.5 building client environment for production...\ntransforming...\n✓ 17 modules transformed.\nrendering chunks...\ncomputing gzip size...\ndist/index.html                   0.54 kB │ gzip:  0.33 kB\ndist/assets/index-BF69deDK.css   12.98 kB │ gzip:  3.78 kB\ndist/assets/index-DI6UGZTu.js   237.53 kB │ gzip: 73.90 kB\n\n✓ built in 195ms",
+      "stderr": "",
+      "label": "Vite/TypeScript production build"
+    },
+    {
+      "command": "\"C:\\Program Files\\nodejs\\npm.cmd\" run lint",
+      "exit_code": 0,
+      "expected_exit_codes": [
+        0
+      ],
+      "passed": true,
+      "duration_seconds": 0.844,
+      "stdout": "> web@0.0.0 lint\n> oxlint\n\nsrc/App.tsx:94:26: warning react(set-state-in-effect): Calling setState synchronously within an effect can trigger cascading renders help: Effects should synchronize React with external systems. Calling setState synchronously inside an effect starts another render and is usually unnecessary. Derive the value during render, initialize state directly, or update it from the event that caused the change. Use an effect only when synchronizing with an external system.",
+      "stderr": "",
+      "label": "UI lint"
+    },
+    {
+      "command": "D:\\AI\\DrowningProject\\.venv\\Scripts\\python.exe -m compileall -q src tests scripts",
+      "exit_code": 0,
+      "expected_exit_codes": [
+        0
+      ],
+      "passed": true,
+      "duration_seconds": 0.278,
+      "stdout": "",
+      "stderr": "",
+      "label": "Compile Python"
+    },
+    {
+      "command": "D:\\AI\\DrowningProject\\.venv\\Scripts\\python.exe notebooks/build_notebook.py",
+      "exit_code": 0,
+      "expected_exit_codes": [
+        0
+      ],
+      "passed": true,
+      "duration_seconds": 0.184,
+      "stdout": "D:\\AI\\DrowningProject\\notebooks\\Drowning_Temporal_Kaggle.ipynb",
+      "stderr": "",
+      "label": "Build Kaggle notebook locally (no push/run)"
+    },
+    {
+      "command": "D:\\AI\\DrowningProject\\.venv\\Scripts\\python.exe -m drowning.cli db check",
+      "exit_code": 0,
+      "expected_exit_codes": [
+        0
+      ],
+      "passed": true,
+      "duration_seconds": 1.375,
+      "stdout": "{\n  \"database_reachable\": true,\n  \"database_type\": \"postgresql\",\n  \"schema_revision\": \"20261026_01\"\n}",
+      "stderr": "",
+      "label": "Real PostgreSQL readiness"
+    },
+    {
+      "command": "D:\\AI\\DrowningProject\\.venv\\Scripts\\python.exe -m drowning.cli source build-windows local-cache/derived/alanoud-v4.jsonl",
+      "exit_code": 3,
+      "expected_exit_codes": [
+        3
+      ],
+      "passed": true,
+      "duration_seconds": 0.82,
+      "stdout": "{\n  \"schema_version\": 1,\n  \"status\": \"blocked\",\n  \"temporal_media_count\": 0,\n  \"verified_track_count\": 0,\n  \"window_count\": 0,\n  \"blockers\": [\n    \"no_temporal_video_annotations\",\n    \"no_windows_meet_verified_track_sampling_contract\",\n    \"verified_group_split_manifest_required_or_invalid\"\n  ],\n  \"issues\": [],\n  \"source_video_disjointness_verified\": false,\n  \"training_started\": false,\n  \"split_manifest_missing_media_count\": 9997,\n  \"split_manifest_issues\": []\n}",
+      "stderr": "",
+      "label": "Temporal preflight on real image-only dataset"
+    },
+    {
+      "command": "D:\\AI\\DrowningProject\\.venv\\Scripts\\python.exe -m drowning.cli source build-splits local-cache/derived/alanoud-v4.jsonl --output D:\\AI\\DrowningProject\\local-cache\\review\\blocked-split-94f59ca0679e496c8734b5e049538d0f.jsonl",
+      "exit_code": 3,
+      "expected_exit_codes": [
+        3
+      ],
+      "passed": true,
+      "duration_seconds": 0.586,
+      "stdout": "{\n  \"status\": \"blocked\",\n  \"reason\": \"source-video/session grouping is unverified for 9997 media records\",\n  \"split_manifest_written\": false,\n  \"source_video_disjointness_verified\": false\n}",
+      "stderr": "",
+      "label": "Verified group split preflight"
+    }
+  ],
+  "live": {
+    "transport": "real loopback TCP HTTP, separate uvicorn process",
+    "port": 63646,
+    "server_stopped_after_review": true,
+    "checks": [
+      {
+        "name": "Health",
+        "method": "GET",
+        "path": "/health",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.002,
+        "body": {
+          "status": "alive",
+          "service": "drowning-project"
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Real PostgreSQL readiness",
+        "method": "GET",
+        "path": "/ready",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.068,
+        "body": {
+          "ready": true,
+          "database": "reachable"
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Sanitized configuration",
+        "method": "GET",
+        "path": "/api/v1/config-status",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.01,
+        "body": {
+          "app_env": "development",
+          "api_host": "127.0.0.1",
+          "api_port": 8000,
+          "database_configured": true,
+          "drive_configured": false,
+          "kaggle_kernel_configured": false,
+          "kaggle_private": true,
+          "train_executor": "kaggle",
+          "local_training_enabled": false,
+          "dataset_root_configured": true,
+          "model_bundle_configured": true,
+          "model_bundle_manifest_present": false,
+          "person_detector_configured": false,
+          "database_reachable": true
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Production React page",
+        "method": "GET",
+        "path": "/",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.016,
+        "body": null,
+        "content_type": "text/html; charset=utf-8"
+      },
+      {
+        "name": "Production static asset",
+        "method": "GET",
+        "path": "/assets/index-DI6UGZTu.js",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.061,
+        "body": null,
+        "content_type": "application/javascript"
+      },
+      {
+        "name": "Production static asset",
+        "method": "GET",
+        "path": "/assets/index-BF69deDK.css",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.028,
+        "body": null,
+        "content_type": "text/css; charset=utf-8"
+      },
+      {
+        "name": "Source registry",
+        "method": "GET",
+        "path": "/api/v1/sources",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.012,
+        "body": {
+          "sources": [
+            {
+              "source_id": "alanoud_swimming_drowning",
+              "source_version": "4",
+              "format": "yolo_detection",
+              "modality": "image",
+              "valid_config": true,
+              "errors": [],
+              "root_env": "ALANOUD_V4_DATA_ROOT",
+              "root_configured": true,
+              "root_exists": true,
+              "mapping_review_status": "pending_sample_review",
+              "mapping_actions": [
+                {
+                  "original_label": "Drowning",
+                  "normalized_label": "drowning",
+                  "action": "map",
+                  "canonical_label": "drowning",
+                  "reason": null
+                },
+                {
+                  "original_label": "Swimming",
+                  "normalized_label": "swimming",
+                  "action": "map",
+                  "canonical_label": "swimming",
+                  "reason": null
+                },
+                {
+                  "original_label": "out of water",
+                  "normalized_label": "out of water",
+                  "action": "map",
+                  "canonical_label": "out_of_water",
+                  "reason": null
+                }
+              ]
+            }
+          ]
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Read-only real source scan",
+        "method": "POST",
+        "path": "/api/v1/sources/alanoud_swimming_drowning/scan",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 5.99,
+        "body": {
+          "source_id": "alanoud_swimming_drowning",
+          "source_version": "4",
+          "format": "yolo_detection",
+          "media_count": 9997,
+          "annotation_count": 18506,
+          "media_counts_by_original_split": {
+            "test": 2006,
+            "train": 6014,
+            "valid": 1977
+          },
+          "annotation_counts_by_source_label": {
+            "Drowning": 10699,
+            "Swimming": 7195,
+            "out of water": 612
+          },
+          "annotation_counts_by_mapping_action": {
+            "map": 18506
+          },
+          "malformed_annotation_count": 0,
+          "malformed_annotations_sample": [],
+          "source_data_modified": false
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Real model registry",
+        "method": "GET",
+        "path": "/api/v1/models",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.038,
+        "body": {
+          "models": []
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Real inference readiness",
+        "method": "GET",
+        "path": "/api/v1/test/readiness",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.02,
+        "body": {
+          "ready_for_request": false,
+          "reason": "No approved model is registered for this model family",
+          "max_upload_bytes": 536870912,
+          "model_loaded": false
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "No approved model blocks inference",
+        "method": "POST",
+        "path": "/api/v1/test/image",
+        "expected_http": 409,
+        "observed_http": 409,
+        "passed": true,
+        "duration_seconds": 0.036,
+        "body": {
+          "detail": "No approved model is registered for this model family"
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Persist prepare job (no dispatch)",
+        "method": "POST",
+        "path": "/api/v1/jobs",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.031,
+        "body": {
+          "job": {
+            "id": "0506b00d-9b1a-44f7-9f88-5e21226762b3",
+            "job_type": "prepare",
+            "state": "queued",
+            "phase": "queued",
+            "idempotency_key": "review-prepare-4727e32698854f1fb5cc699daebb15ef",
+            "owner_id": null,
+            "execution_token": 0,
+            "remote_ref": null,
+            "remote_version": null,
+            "remote_status": null,
+            "error_code": null,
+            "error_summary": null,
+            "created_at": "2026-10-25T19:41:37.220191+00:00",
+            "updated_at": "2026-10-25T19:41:37.220191+00:00"
+          },
+          "created": true,
+          "dispatch": "not_started"
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Idempotent HTTP retry",
+        "method": "POST",
+        "path": "/api/v1/jobs",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.03,
+        "body": {
+          "job": {
+            "id": "0506b00d-9b1a-44f7-9f88-5e21226762b3",
+            "job_type": "prepare",
+            "state": "queued",
+            "phase": "queued",
+            "idempotency_key": "review-prepare-4727e32698854f1fb5cc699daebb15ef",
+            "owner_id": null,
+            "execution_token": 0,
+            "remote_ref": null,
+            "remote_version": null,
+            "remote_status": null,
+            "error_code": null,
+            "error_summary": null,
+            "created_at": "2026-10-25T19:41:37.220191+00:00",
+            "updated_at": "2026-10-25T19:41:37.220191+00:00"
+          },
+          "created": false,
+          "dispatch": "not_started"
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Persistent job events",
+        "method": "GET",
+        "path": "/api/v1/jobs/0506b00d-9b1a-44f7-9f88-5e21226762b3/events",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.022,
+        "body": {
+          "events": [
+            {
+              "sequence": 1,
+              "from_state": "created",
+              "to_state": "queued",
+              "event_type": "job_queued",
+              "details": {},
+              "created_at": "2026-10-25T19:41:37.223102+00:00"
+            }
+          ]
+        },
+        "content_type": "application/json"
+      },
+      {
+        "name": "Review job audit retained after cleanup",
+        "method": "GET",
+        "path": "/api/v1/jobs/0506b00d-9b1a-44f7-9f88-5e21226762b3",
+        "expected_http": 200,
+        "observed_http": 200,
+        "passed": true,
+        "duration_seconds": 0.018,
+        "body": {
+          "job": {
+            "id": "0506b00d-9b1a-44f7-9f88-5e21226762b3",
+            "job_type": "prepare",
+            "state": "cancelled",
+            "phase": "review_complete_no_dispatch",
+            "idempotency_key": "review-prepare-4727e32698854f1fb5cc699daebb15ef",
+            "owner_id": null,
+            "execution_token": 0,
+            "remote_ref": null,
+            "remote_version": null,
+            "remote_status": null,
+            "error_code": null,
+            "error_summary": null,
+            "created_at": "2026-10-25T19:41:37.220191+00:00",
+            "updated_at": "2026-10-25T19:41:37.675485+00:00"
+          }
+        },
+        "content_type": "application/json"
+      }
+    ],
+    "review_job_id": "0506b00d-9b1a-44f7-9f88-5e21226762b3",
+    "source_before": {
+      "file_count": 19997,
+      "metadata_sha256": "31f183d2a31bc317ab3ea5862589379f5361bf8d98bf50dc8a95c47d32df97a7",
+      "method": "relative path, size, mtime_ns; not content hash"
+    },
+    "source_after": {
+      "file_count": 19997,
+      "metadata_sha256": "31f183d2a31bc317ab3ea5862589379f5361bf8d98bf50dc8a95c47d32df97a7",
+      "method": "relative path, size, mtime_ns; not content hash"
+    },
+    "source_metadata_unchanged": true
+  },
+  "postgres": {
+    "action": "resumed_owned_container",
+    "container": "drowning-local-pg-20261026",
+    "image_id": "sha256:de1e13ca94377fa5a27aafd0e9fc200df9692b15152f0090fdf074074ea5e397",
+    "postgres_version": "17.10 (Debian 17.10-1.pgdg13+1)",
+    "bind": "127.0.0.1",
+    "port": 55439,
+    "development_database": "drowning_dev",
+    "test_database": "drowning_test",
+    "credentials": "stored only in ignored local .env",
+    "shared_cloud_database_verified": false
+  },
+  "code": {
+    "sha256": "57ec65db4467960e246b441401d42cd008d0757654a1b51dc1fd11477027f8e9",
+    "method": "sorted source/config/migration/web/script/test file SHA-256 manifest",
+    "files": [
+      {
+        "file": "src/drowning/__init__.py",
+        "sha256": "4326219dea19a04a0f2e41fa834099a7219fc30701d480fdc4b2011626edaadc"
+      },
+      {
+        "file": "src/drowning/api/__init__.py",
+        "sha256": "e4429e4afd3df8610bf4a3b9214f51595a1878eba12e0f06ab86376a2c37f9b4"
+      },
+      {
+        "file": "src/drowning/api/app.py",
+        "sha256": "645753f96081fe9def26b16f83516beab5db056c878f608162c861f9fffcabc3"
+      },
+      {
+        "file": "src/drowning/api/inference.py",
+        "sha256": "a8c71ed74704c44e21885a898253263eb2a55a4273a978d1950ebd259e46635b"
+      },
+      {
+        "file": "src/drowning/api/media.py",
+        "sha256": "ebd419294212ccf61d8761c9adf9018ddbdceead56a2291209160a2c6cebab32"
+      },
+      {
+        "file": "src/drowning/api/model_sync.py",
+        "sha256": "63b47d68ea836de01ae0e4f758d885bffacf66d040e5f17b87c6221e0ed50885"
+      },
+      {
+        "file": "src/drowning/api/test_jobs.py",
+        "sha256": "43cb65bd5a3d168b568a8895e4681818ed1c1e302b0a6f87f7706e33373008d9"
+      },
+      {
+        "file": "src/drowning/cli.py",
+        "sha256": "3273bfe02ee173c2254199185a3c1ac65e0e0362e12ea63f91678c9fddd43876"
+      },
+      {
+        "file": "src/drowning/config.py",
+        "sha256": "3270025e152b31fb6360857ef8dcb3c17b900680e25a6699504345875560f045"
+      },
+      {
+        "file": "src/drowning/data/__init__.py",
+        "sha256": "8c9976052b398518680a783755df1fcbb26c8ba3e6d747dfb8e11a1d7839569c"
+      },
+      {
+        "file": "src/drowning/data/adapters.py",
+        "sha256": "926e22510dc6c9254eb99f2ac2e7064ed10e244a947d8ca97aefee34d5326549"
+      },
+      {
+        "file": "src/drowning/data/audit.py",
+        "sha256": "0631c5c45625cf528eea98f007acc312ccad36cdb5787c8ecfa75febae46be35"
+      },
+      {
+        "file": "src/drowning/data/crops.py",
+        "sha256": "c4e2842aad11a310e833aafac6fadcd2525af486f817b56ce1cd0d44f072b073"
+      },
+      {
+        "file": "src/drowning/data/grouping.py",
+        "sha256": "2257298c9d8e8c2f085b2e5f25754532ebc85948ed2d5cb6aec772a1c2b7d15d"
+      },
+      {
+        "file": "src/drowning/data/labels.py",
+        "sha256": "65f3e90dea8f97f52d2af012139cf5a84e35c156c3991eb2fe3ff90d3ff77f0f"
+      },
+      {
+        "file": "src/drowning/data/registry.py",
+        "sha256": "fda9c116212ef9b0a151e001625ce5948d3e95728dd55275b1e2d4ce34d4361a"
+      },
+      {
+        "file": "src/drowning/data/windows.py",
+        "sha256": "2daa5720eeeba68eed75e682950ed6040251a8a753f9b31fd8b28c256d36c425"
+      },
+      {
+        "file": "src/drowning/db/__init__.py",
+        "sha256": "31ebcaeb992638876c121e1554364fdb68109e08901b65a425b28981a1252c97"
+      },
+      {
+        "file": "src/drowning/db/models.py",
+        "sha256": "7b92dd0ed5e4649444b94e0995684955dd6edb4a853367ea5184723af128c301"
+      },
+      {
+        "file": "src/drowning/db/repositories.py",
+        "sha256": "d0899dde7a7445bd4115dc94dc2e98015a7961812d0a31019f282d6686cc05cf"
+      },
+      {
+        "file": "src/drowning/db/session.py",
+        "sha256": "d99d80084738f724f2657a3fe47271e7207396d70cbc4e427c01714875362626"
+      },
+      {
+        "file": "src/drowning/domain/__init__.py",
+        "sha256": "539af415bbf6437f6e42aca4f4b26a2f7066ffb0eeee0387b90b88496ec6fb61"
+      },
+      {
+        "file": "src/drowning/domain/jobs.py",
+        "sha256": "99be7ef3128c2318e1d13a77e85042cb8c59a861d0a82d173b0cce233c533f53"
+      },
+      {
+        "file": "src/drowning/inference/__init__.py",
+        "sha256": "323fba4948e7908613aafe96241d0624b6fe162f9cdbfca61c417dd7eb58065f"
+      },
+      {
+        "file": "src/drowning/inference/buffer.py",
+        "sha256": "e1052bcb6751200ca51ba35f3a2f0cc3f5aa8e2a4d9d947c790c1751cd5c8a43"
+      },
+      {
+        "file": "src/drowning/inference/detector.py",
+        "sha256": "8bdd4084490bc6a58bda7f7bdeca7f2aa683c2808d6b547c227ded96fad33b6d"
+      },
+      {
+        "file": "src/drowning/inference/pipeline.py",
+        "sha256": "8d1a0cd9d0f62014f18d617b95b3a9824d80373f6e44611da29b57c604b507dc"
+      },
+      {
+        "file": "src/drowning/inference/tracking.py",
+        "sha256": "f78e5b6813a507fc8624ab8758c83efa45642992bc7865ae4d9d8f7894d42de9"
+      },
+      {
+        "file": "src/drowning/integrations/__init__.py",
+        "sha256": "a7a33b2e3f8851e7ad7858627f05eefc2cfb8f0a17a983ef1bb83e7782dda95a"
+      },
+      {
+        "file": "src/drowning/integrations/drive.py",
+        "sha256": "23628e0430f4a2b25d9107eeeff65e98c1cf11a75291ebc36e45b11d57de2a50"
+      },
+      {
+        "file": "src/drowning/integrations/kaggle.py",
+        "sha256": "24afd6fe49a810ba1ac9558a060997dd8a592d487157be0f9aa85d08b7d44234"
+      },
+      {
+        "file": "src/drowning/logging_utils.py",
+        "sha256": "d6acacae9d413a7ad5ba3a7ebf58bf46e699837ee69a42d6faebbe3f6e39738d"
+      },
+      {
+        "file": "src/drowning/ml/__init__.py",
+        "sha256": "cb361762c8b59be10e5aae2a10c4222fe37a41622ea56855903a7bd1c567223d"
+      },
+      {
+        "file": "src/drowning/ml/bundle.py",
+        "sha256": "e5e5aade1da3fed9202b0c1ef3e8ab52400bb0606a54b44b36662030965a2bbe"
+      },
+      {
+        "file": "src/drowning/ml/datasets.py",
+        "sha256": "12a8dbb08c5f68a022a604cae709d5fa1e634e9076049359bd0545d72f4f2239"
+      },
+      {
+        "file": "src/drowning/ml/model.py",
+        "sha256": "878a20904febdf0d61a717bf8e3855aa32e40c17d754f3ed18e5c9fd72c1aeba"
+      },
+      {
+        "file": "src/drowning/ml/preprocessing.py",
+        "sha256": "52457f8f59c7a647d9f1536fc2fb34408b3b76e491e5f606aa88743aacef6f26"
+      },
+      {
+        "file": "src/drowning/ml/training.py",
+        "sha256": "c80ff7cdba2ccc4cf48cd952bac3e95bb189eb18ce1065afbc1621d41038dbfa"
+      },
+      {
+        "file": "src/drowning/orchestration/__init__.py",
+        "sha256": "f3500116de7f0a04ab221906b83b7c33639d592bd9e6155656408eb4216ada29"
+      },
+      {
+        "file": "src/drowning/orchestration/candidate_sync.py",
+        "sha256": "60cb059518f834c6b5272d2becbeea42a05439473c770f04316bc5503ddce8a3"
+      },
+      {
+        "file": "src/drowning/orchestration/kaggle_dispatch.py",
+        "sha256": "978a9b46307d7063f643ccff41bc9c663680589cb4fd0dd787d0d58af5f3a26a"
+      },
+      {
+        "file": "configs/datasets/alanoud_swimming_drowning_v4.yaml",
+        "sha256": "fc7d273d59148c00e868e295565084520a47b6d50eed427488f3240e581ee748"
+      },
+      {
+        "file": "configs/ontology.yaml",
+        "sha256": "6a22f991d7a566a1e8791f2b50cfac36f12a5304fb5afe5957193e63fa10e6dd"
+      },
+      {
+        "file": "configs/recipes/evaluation.yaml",
+        "sha256": "12f98b7a83d140f9a429bed4c82fa24553ff044e1f56f6820a85eba15d517761"
+      },
+      {
+        "file": "configs/recipes/image.yaml",
+        "sha256": "2bd012e16e5f502685a2ef27d8833f4ec5dbcebaaa927efaca77ccb06e14a015"
+      },
+      {
+        "file": "configs/recipes/temporal.yaml",
+        "sha256": "7e746ca0044f49131d855bd00003527ab61c1b9f25bb1bebeffbda937f672554"
+      },
+      {
+        "file": "migrations/env.py",
+        "sha256": "0c4c3e5f6f4265f561c4f194cb6c887c5a875703bd866040c07ac16b0038e7df"
+      },
+      {
+        "file": "migrations/versions/20261026_01_initial_schema.py",
+        "sha256": "44d97aa32cf521401e5f7bcf23f55887527c8f98df795cb9c58f4cf0dd1e32ad"
+      },
+      {
+        "file": "migrations/versions/__init__.py",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "file": "web/src/App.css",
+        "sha256": "0240239280cd5268a4db7630bf565a73775b08245d896c52f6f6dd5816bb51ac"
+      },
+      {
+        "file": "web/src/App.tsx",
+        "sha256": "f4e7f156a426bfc4a9422c267da79ebdf2cda1576d46215f9f603d398dcd7611"
+      },
+      {
+        "file": "web/src/index.css",
+        "sha256": "8c648856fed2e62185e1113d37d39020ad4428cf94501b11b97be1267d9cc29d"
+      },
+      {
+        "file": "web/src/main.tsx",
+        "sha256": "6e9e5807fcbd48b75a96db5cbef36c996262196be42e6d4760dc86babbe61ad2"
+      },
+      {
+        "file": "scripts/generate_initial_migration.py",
+        "sha256": "77bd22c3c1432d449c30269ed0725ad50c7eb5a256b6fb02f7840eb487dd3f4a"
+      },
+      {
+        "file": "scripts/provision_local_postgres.py",
+        "sha256": "3f1046fc48e34456083c70ce9b23c764deb0d2d826d654aa9e5c16506e231aac"
+      },
+      {
+        "file": "scripts/review_main_flows.py",
+        "sha256": "36cf043686c4667292e81ce9cfadbaa79253ecd1d78609d6410e75c62c721164"
+      },
+      {
+        "file": "scripts/run_regression.py",
+        "sha256": "6991c162da3f1cb20e6d36d4b8d6dab151817e9ad84492dca418831f6f523244"
+      },
+      {
+        "file": "tests/test_adapters.py",
+        "sha256": "a9847f53fae5ec265a6d95af050e38177dce74ac2f9e32f4571ecb4dd524793e"
+      },
+      {
+        "file": "tests/test_api.py",
+        "sha256": "4f78fdd449758f3d1d5e91da41df7d3bc8fdab84bf2ad398b746f0646381d10e"
+      },
+      {
+        "file": "tests/test_audit.py",
+        "sha256": "0f1e59110dddcec7464685a84ff0bea6403b15600df69254deb1de318872adda"
+      },
+      {
+        "file": "tests/test_candidate_sync.py",
+        "sha256": "18cab998bcc8130e07d77e6b5dc2f114d5fb0dd2eb2a64e8cacb21ea88a8bf80"
+      },
+      {
+        "file": "tests/test_config.py",
+        "sha256": "b3255ea14942d28fd801bf89d0561ee103d8d7077d4ba0ecfec42d7e8cfe9859"
+      },
+      {
+        "file": "tests/test_cvat_adapter.py",
+        "sha256": "aeb09450964d874abf5e3b7dca67016bf5743f37578e4b0f0d52f5717b7a1555"
+      },
+      {
+        "file": "tests/test_db_jobs.py",
+        "sha256": "43c9c82632eac0df31604dce117f3d888d1442157835a413ede28829aa5e2b62"
+      },
+      {
+        "file": "tests/test_drive_adapter.py",
+        "sha256": "cbcfaa8a280bf02d02c4b6db5e593a21fae396736dd8d3f4fb9e68f00b24e8d2"
+      },
+      {
+        "file": "tests/test_grouping.py",
+        "sha256": "40fbd8dd3533e24f3f0b6f9f1c44aeaa3e693e420aac04e60dac7facd482333c"
+      },
+      {
+        "file": "tests/test_inference_pipeline.py",
+        "sha256": "4870fbda56cecc50a89a1cde66b3ea55f63a1a76b496e646467759875294f5b8"
+      },
+      {
+        "file": "tests/test_kaggle_adapter.py",
+        "sha256": "71bbf8739da763783b2f337dc63781a0d5a4f67ef7cfb3077953d88103d1c77c"
+      },
+      {
+        "file": "tests/test_kaggle_dispatch.py",
+        "sha256": "f2281c6191dd5eb0bacc93950c8b8d47b9b07243cd0fe2809f7e60954dc1d5ce"
+      },
+      {
+        "file": "tests/test_kaggle_materializer.py",
+        "sha256": "8e79f22d3d879ab791a29ff0b5acda69f13a88d6e1f45915aaf52123156ddf4d"
+      },
+      {
+        "file": "tests/test_logging_utils.py",
+        "sha256": "aa1abcca19f43d22ae14c0f11ee315db2a696098acfa3ff2573edfc30ff679b0"
+      },
+      {
+        "file": "tests/test_media_api.py",
+        "sha256": "389bb1707d01c3f1d9fc82c695bcd632a4ca9cabef020d7157652cda687d3b09"
+      },
+      {
+        "file": "tests/test_migrations.py",
+        "sha256": "bdd4e2a771ea7fdec9a35d0111f4ee6aabcb54e5e3015b3ea4e53c4601499a7c"
+      },
+      {
+        "file": "tests/test_ml_model.py",
+        "sha256": "debffb59a69c3ec742bcbbbb4c4a2dc20647c2f4b1933d22d28e910c540f7a82"
+      },
+      {
+        "file": "tests/test_model_sync.py",
+        "sha256": "4eddd4dafe2522af03498ac20e21bc5eadaccf2c3add7ce7b79719db178d2e70"
+      },
+      {
+        "file": "tests/test_notebook_builder.py",
+        "sha256": "43685f54947cc5ed968890822a3c6ee022992e2dd8e600e828b903b69dc12645"
+      },
+      {
+        "file": "tests/test_postgres_integration.py",
+        "sha256": "f2f8e3321cc7646fa2e9dd40b9525f360a603e6671fac0ce9f5f66578779fde4"
+      },
+      {
+        "file": "tests/test_registry.py",
+        "sha256": "e05fc56b006b74597a28ff42ab67a5fa18892429d36c8e29a41b23ce0394a073"
+      },
+      {
+        "file": "tests/test_temporal_buffer.py",
+        "sha256": "50ef57d365be3c6ceb42b0860d56dc6e220dc265c8b2381773c1d8c086f569da"
+      },
+      {
+        "file": "tests/test_training_contracts.py",
+        "sha256": "308695b72f34cd8af579b9bfd7319d6d3f6473491fb687a95b3b4f21cb7ed685"
+      },
+      {
+        "file": "tests/test_training_datasets.py",
+        "sha256": "b8b1266336acf2a409154a0199e1848e85f589c97a9bde48e6e4edf35ae6b3e9"
+      },
+      {
+        "file": "tests/test_windows.py",
+        "sha256": "d5dea0da482221f65c8eaabf0e7e0f82d621039b0d4f00e3ed911bf45964bc2f"
+      }
+    ]
+  },
+  "input": {
+    "canonical_sha256": "636cc9eb0133a3b8bfab854cf48746f2957d231f0d8e48b35eeff830369f33f6",
+    "real_approved_model": null,
+    "real_model_hash": null
+  },
+  "scan_profile_seconds": {
+    "before": 42.922,
+    "after": 10.242
+  },
+  "initial_review_failure": {
+    "check": "real source scan over HTTP",
+    "error": "httpx.ReadTimeout",
+    "timeout_seconds": 60,
+    "fixed_in": "src/drowning/data/adapters.py"
+  },
+  "no_local_real_training": true,
+  "live_cloud_exercised": false,
+  "post_review_verification": {
+    "report_structure": "passed",
+    "local_links_checked": 23,
+    "actual_secret_values_present": false,
+    "regression": "107/107 passed; 0 skipped",
+    "real_postgres_tests": 6,
+    "real_http_checks": 15,
+    "scan_seconds": 5.99,
+    "source_inventory_files": 19997,
+    "source_metadata_unchanged": true,
+    "browser_render_verified": false
+  },
+  "runtime_handoff": {
+    "review_api_stopped": true,
+    "persistent_api_started": false,
+    "background_start": "automatic approval review rejected: blocked by policy; no detailed reason provided",
+    "postgres_local_available": true
+  }
+}

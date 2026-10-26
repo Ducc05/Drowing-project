@@ -1,0 +1,13 @@
+schema_version: 1
+recipe_id: person-state-evaluation-v1
+class_keys: [drowning, swimming, out_of_water]
+metrics:
+  - accuracy
+  - macro_f1
+  - per_class_recall
+  - confusion_matrix
+split_requirements:
+  preserve_source_video_groups: true
+  preserve_user_holdout: true
+  report_image_and_temporal_separately: true
+end_to_end_required: true

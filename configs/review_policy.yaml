@@ -1,0 +1,39 @@
+# Chính sách duyệt dữ liệu: người dùng KHÔNG duyệt tay. Máy chấm quy tắc khách quan; AI xem ảnh theo
+# tiêu chí và ngưỡng dưới đây; hệ thống tự quyết định và ghi lại ai duyệt, dựa trên bằng chứng nào.
+# Đổi ngưỡng ở đây sẽ đổi phiên bản chính sách (rules_version) ghi trong mỗi bản duyệt.
+version: 1
+
+delegation:
+  allow_ai_approval: true          # AI được duyệt thay người dùng (người dùng đã ủy quyền)
+  delegated_by: user
+  # AI chỉ được duyệt khi đã NHÌN ảnh bằng chứng. Không xem được ảnh thì phải trả "uncertain".
+  require_evidence_hash: true
+
+# --- Quy tắc tự động (máy chấm, khách quan). severity: fail = chặn; warn = ghi chú, không chặn ---
+auto_rules:
+  audit_valid:               {severity: fail}
+  no_malformed_annotations:  {severity: fail}
+  all_labels_resolved:       {severity: fail}          # không còn nhãn nguồn nào ở trạng thái review
+  same_box_conflict_fraction: {severity: fail, max: 0.001}
+  min_boxes_per_mapped_label: {severity: fail, min: 100}
+  min_class_share:           {severity: warn, min: 0.02}   # lớp ít nhất / tổng khung
+  tiny_box_fraction:         {severity: warn, max: 0.10}
+  ambiguous_label_names:     {severity: fail}          # normal/person/not drowning... cần định nghĩa bằng lời
+  near_duplicate_checked:    {severity: fail}
+  largest_cluster_fraction:  {severity: warn, max: 0.10, fail_above: 0.25}   # nghi ngờ gom dây chuyền
+
+# --- Ngưỡng cho kết luận của AI sau khi xem ảnh (tỉ lệ trên số mẫu đã xem) ---
+ai_rules:
+  mapping:
+    min_samples_viewed_per_label: 24        # bảng ngẫu nhiên
+    min_visible_person_fraction: 0.80       # ảnh có thấy rõ một người
+    min_label_consistent_fraction: 0.80     # khớp với ý nghĩa nhãn chuẩn
+  grouping:
+    min_cross_split_pairs_viewed: 12
+    min_same_scene_fraction: 0.90           # cặp vắt qua split thật sự là cùng ảnh/cảnh
+    min_largest_cluster_same_scene_fraction: 0.80
+
+# --- Khi không đạt ---
+on_reject:
+  action: exclude_source        # nguồn bị loại khỏi train kèm lý do; các nguồn khác vẫn chạy bình thường
+  ask_user_when: [uncertain]    # chỉ hỏi người dùng khi AI trả "uncertain"

@@ -1,0 +1,22 @@
+schema_version: 1
+recipe_id: image-mobilenetv3-small-v1
+model_family: drowning-person-temporal-v1
+stage: image
+class_keys: [drowning, swimming, out_of_water]
+input:
+  color: RGB
+  size: [224, 224]
+  crop_context_fraction: 0.15
+  resize_mode: letterbox
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+model:
+  encoder: mobilenet_v3_small
+  pretrained_weights: explicit_opt_in_default_false
+  image_head: linear
+training:
+  optimizer: adamw
+  learning_rate: 0.0003
+  batch_size: 32
+  seed: 20261026
+notes: Baseline defaults for later Kaggle benchmarking; not a validated optimum.

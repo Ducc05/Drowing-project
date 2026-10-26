@@ -1,0 +1,34 @@
+{
+  "confirmed_labels": [
+    "Drowning",
+    "Swimming",
+    "out of water"
+  ],
+  "mapping": {
+    "Drowning": {
+      "action": "map",
+      "target": "drowning"
+    },
+    "Swimming": {
+      "action": "map",
+      "target": "swimming"
+    },
+    "out of water": {
+      "action": "map",
+      "target": "out_of_water"
+    }
+  },
+  "mapping_hash": "b02620bc90edbfd4a0c289de5c0d41ff38f92ca5f36e89076098ee659bd40643",
+  "notes": {},
+  "reviewed_at": "2026-10-26T07:00:55.223720+00:00",
+  "reviewer": "đức",
+  "samples_viewed": {
+    "Drowning": 24,
+    "Swimming": 24,
+    "out of water": 48
+  },
+  "schema_version": 1,
+  "source_id": "alanoud_swimming_drowning",
+  "source_version": "4",
+  "status": "approved"
+}
