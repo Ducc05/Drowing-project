@@ -1,0 +1,38 @@
+# Kaggle dataset vuduc792005/dataset-test-1 (private). A Roboflow-style YOLO export that was uploaded WITHOUT data.yaml
+# and with only a train/ folder: 10,140 images and 10,140 label files, 4,613 distinct source names, about 14.5
+# augmented copies per original frame.
+#
+# The class order below is INFERRED, not read from the dataset: on a sample image, class 2 is people swimming normally
+# and class 0 is a person submerged under the surface, and the same order (0 Drowning, 1 Person out of water,
+# 2 Swimming) is what the old Demo model uses. Class 1 was not seen in the files checked. The owner of the dataset
+# must confirm this before the mapping is approved; until then every report lists this source as unconfirmed.
+schema_version: 1
+source_id: dataset_test_1
+source_version: "1"
+format: yolo_detection
+modality: image
+annotation_scope: person_bbox
+provider:
+  kind: user_roboflow_export
+  note: private dataset of the project owner, frames cut from pool videos
+provenance:
+  url: https://www.kaggle.com/datasets/vuduc792005/dataset-test-1
+  license_declared: unknown
+  license_verified_for_all_media: false
+paths:
+  root_env: DATASET_TEST_1_DATA_ROOT
+  marker: train/labels            # the dataset ships no data.yaml, so a folder is the marker
+  input_dir_contains: dataset-test-1   # Alanoud also has train/labels; the attached dataset's name tells them apart
+source_labels:
+  class_names: {0: Drowning, 1: Person out of water, 2: Swimming}
+mapping:
+  Drowning: {action: map, target: drowning}
+  Swimming: {action: map, target: swimming}
+  Person out of water: {action: map, target: out_of_water}
+mapping_review:
+  status: pending_sample_review
+  sample_review_required: true
+# Roboflow file names are <source video>-<frame number>_jpg.rf.<hash>.jpg. Everything from one source video stays in
+# one split, because the augmented copies and neighbouring frames of one video look almost the same.
+grouping:
+  path_regex: '^train/images/(.+?)-\d+_jpg\.rf\.[0-9a-f]+\.[A-Za-z0-9]+$'

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import './pages.css'
 import { api, fmt, request } from './api'
@@ -42,19 +42,21 @@ type Job = { id: string; job_type: string; state: string; phase: string; created
 type Model = { id: string; model_family: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; cached_locally: boolean; temporal_trained: boolean; completion_kind: string; created_at: string }
 type ScanReport = { media_count: number; annotation_count: number; media_counts_by_original_split: Record<string, number>; annotation_counts_by_source_label: Record<string, number>; malformed_annotation_count: number; source_data_modified: boolean }
 type TestReadiness = { ready_for_request: boolean; reason?: string; model_version?: string; max_upload_bytes: number }
-type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number } }
+type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number; render?: 'overlay' | 'video' } }
 
 function date(value: string) { return new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' }) }
 function modelKindText(kind: Model['model_kind']) { return kind === 'image_tracked' ? 'ảnh + gộp theo ID' : kind === 'temporal' ? 'temporal' : 'chưa xác định loại' }
 function StatusDot({ ok }: { ok: boolean }) { return <span className={`status-dot ${ok ? 'ok' : 'missing'}`} aria-label={ok ? 'Đã cấu hình' : 'Chưa cấu hình'} /> }
 
 function App() {
+  const mainContent = useRef<HTMLElement>(null)
   const [route, setRoute] = useState<Route>(currentRoute)
   useEffect(() => {
     const onHash = () => setRoute(currentRoute())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
+  useEffect(() => { mainContent.current?.scrollTo(0, 0) }, [route])
   const [config, setConfig] = useState<ConfigStatus | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
@@ -151,6 +153,7 @@ function App() {
     try {
       const result = await request<MediaResult>(`/api/v1/test/${mediaKind}`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form })
       setMediaResult(result)
+      setMediaKey(null)
       const messages: Record<string, string> = {
         completed: 'Kiểm tra và đồng bộ kết quả xong.',
         sync_pending: 'Kiểm tra local xong. Kết quả đang chờ đồng bộ Drive.',
@@ -184,15 +187,15 @@ function App() {
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><span>W</span></div><div><strong>Stillwater</strong><small>Water safety lab</small></div></div>
       <div className="workspace-label">WORKSPACE</div>
-      <button className="workspace-switch"><span className="workspace-avatar">D</span><span><b>Drowning project</b><small>Local environment</small></span><span className="chevron">⌄</span></button>
+      <div className="workspace-switch" aria-label="Workspace hiện tại"><span className="workspace-avatar">D</span><span><b>Drowning project</b><small>Local environment</small></span></div>
       <div className="nav-group"><div className="workspace-label">PROJECT</div>
         {([['overview', '◫', 'Tổng quan'], ['data', '▦', 'Dữ liệu'], ['train', '⌁', 'Train'], ['evaluation', '◈', 'Đánh giá'], ['camera', '◉', 'Camera']] as const).map(([id, icon, text]) =>
-          <a key={id} className={`nav-item ${route === id ? 'selected' : ''}`} href={`#${id}`}><span className="nav-icon">{icon}</span> {text}{id === 'data' ? <span className="nav-count">{sources.length}</span> : null}</a>)}
+          <a key={id} className={`nav-item ${route === id ? 'selected' : ''}`} href={`#${id}`} title={text} aria-label={text} aria-current={route === id ? 'page' : undefined}><span className="nav-icon" aria-hidden="true">{icon}</span> {text}{id === 'data' ? <span className="nav-count">{sources.length}</span> : null}</a>)}
       </div>
-      <div className="sidebar-bottom"><div className="profile"><div className="profile-avatar">AI</div><div><b>Local operator</b><small>Project workspace</small></div><button aria-label="Tùy chọn">•••</button></div><div className="sidebar-foot">DROWNING DETECTION<br /><span>BUILD 0.1.0 · DEV</span></div></div>
+      <div className="sidebar-bottom"><div className="profile"><div className="profile-avatar">AI</div><div><b>Local operator</b><small>Project workspace</small></div><span className="profile-menu" aria-hidden="true">•••</span></div><div className="sidebar-foot">DROWNING DETECTION<br /><span>BUILD 0.1.0 · DEV</span></div></div>
     </aside>
 
-    <main className="main-content" id="overview">
+    <main ref={mainContent} className="main-content" id="overview">
       <header className="topbar"><div className="breadcrumb"><span>Workspace</span><i>/</i><b>Drowning project</b></div><div className="top-actions"><div className={`api-badge ${apiOnline === false ? 'offline' : 'online'}`}><StatusDot ok={apiOnline === true} />{apiOnline === null ? 'Đang kết nối…' : apiOnline ? 'API local' : 'API ngoại tuyến'}</div><button className="icon-button" onClick={() => void refresh()} title="Làm mới">↻</button><div className="user-avatar">OP</div></div></header>
 
       <div className="page-wrap">
@@ -228,7 +231,21 @@ function App() {
             <button className="primary-button" disabled={!testReadiness?.ready_for_request || !mediaFile || testingMedia} onClick={() => void uploadMedia()}>{testingMedia ? 'Đang xử lý…' : mediaKey ? 'Thử lại cùng request' : 'Chạy kiểm tra'}</button>
           </div>
           <p className="media-help">{testReadiness?.ready_for_request ? 'Input tối đa 512 MiB. Video được xử lý offline; khi Drive chưa sẵn sàng, kết quả local vẫn tải được.' : testReadiness?.reason ?? 'Cần PostgreSQL đã migrate, model approved đã sync và detector weights trước khi chạy.'}</p>
-          {mediaResult && <div className="media-result"><div className="result-info"><b>Job {mediaResult.job_id.slice(0, 8)}</b><span>{mediaResult.state} · {mediaResult.result_storage ?? 'đang xử lý'} · {fmt(mediaResult.summary?.detection_count)} detections{mediaResult.summary?.frame_count !== undefined ? ` · ${fmt(mediaResult.summary.frame_count)} frames` : ''}</span><div className="result-links">{mediaResult.files.annotated && <a href={api(mediaResult.files.annotated)} target="_blank" rel="noreferrer">Mở media kết quả</a>}{mediaResult.files.detections && <a href={api(mediaResult.files.detections)} target="_blank" rel="noreferrer">Tải detections JSON</a>}{mediaResult.state === 'sync_pending' && config?.drive_configured && <button className="secondary-button" disabled={syncingResult} onClick={() => void syncResults()}>{syncingResult ? 'Đang đồng bộ…' : 'Đồng bộ lại Drive'}</button>}</div></div>{mediaResult.files.annotated && (mediaResult.modality === 'video' ? <video controls src={api(mediaResult.files.annotated)} /> : <img src={api(mediaResult.files.annotated)} alt="Kết quả kiểm tra ảnh với box và nhãn" />)}</div>}
+          {mediaResult && <div className="media-result">
+            <div className="result-info"><b>Job {mediaResult.job_id.slice(0, 8)}</b>
+              <span>{mediaResult.state} · {mediaResult.result_storage ?? 'đang xử lý'} · {fmt(mediaResult.summary?.detection_count)} detections{mediaResult.summary?.frame_count !== undefined ? ` · ${fmt(mediaResult.summary.frame_count)} frames` : ''}</span>
+              <div className="result-links">
+                {mediaResult.files.annotated && <a href={api(mediaResult.files.annotated)} target="_blank" rel="noreferrer">Mở media kết quả</a>}
+                {mediaResult.files.source && <a href={api(mediaResult.files.source)} target="_blank" rel="noreferrer">Mở video gốc · overlay ở Đánh giá</a>}
+                {mediaResult.files.detections && <a href={api(mediaResult.files.detections)} target="_blank" rel="noreferrer">Tải detections JSON</a>}
+                {mediaResult.state === 'sync_pending' && config?.drive_configured && <button className="secondary-button" disabled={syncingResult} onClick={() => void syncResults()}>{syncingResult ? 'Đang đồng bộ…' : 'Đồng bộ lại Drive'}</button>}
+              </div>
+            </div>
+            {mediaResult.modality === 'video' && (mediaResult.files.annotated || mediaResult.files.source) &&
+              <video controls src={api(mediaResult.files.annotated ?? mediaResult.files.source)} />}
+            {mediaResult.modality === 'image' && mediaResult.files.annotated &&
+              <img src={api(mediaResult.files.annotated)} alt="Kết quả kiểm tra ảnh với box và nhãn" />}
+          </div>}
         </section>
 
         <section className="content-grid">

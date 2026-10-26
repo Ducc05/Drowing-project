@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react'
-import { api, newKey, post, request, useAction, usePolling } from '../api'
-import { Banner, Panel, Tag } from '../ui'
+import { api, newKey, post, request, scoreText, useAction, usePolling } from '../api'
+import { Banner, ClassScores, Panel, Tag } from '../ui'
 
-type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; bbox_xyxy: number[] }
+type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; class_scores?: number[] | null; bbox_xyxy: number[] }
 type Status = {
   active: boolean; job_id?: string; source?: string; state?: string; error?: string | null; width?: number; height?: number
   frames_read?: number; frames_processed?: number; frames_dropped?: number; processed_fps?: number | null
@@ -11,7 +11,7 @@ type Status = {
 }
 type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string }
 
-const labelText: Record<string, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
+const labelText: Record<string, string> = { drowning: 'drowning', swimming: 'swimming', out_of_water: 'out_of_water' }
 const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
   image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)' }
 
@@ -70,10 +70,11 @@ export default function CameraPage() {
             <div><b>{status.frames_dropped ?? 0}</b><span>khung bị bỏ qua</span></div>
           </div>
           <p className="muted">Tracker: {status.tracker}. ID là ID tạm của tracker, không phải danh tính đã xác minh. Nếu model chậm hơn camera, khung cũ bị bỏ để không tích trễ.</p>
-          <table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>Nhánh</th><th>Phát hiện</th></tr></thead>
+          <p className="muted">Ba điểm nhãn có thang 0–1 và chưa được hiệu chuẩn. Điểm YOLO tìm người tách riêng với điểm phân loại.</p>
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>Nhánh</th><th>YOLO tìm người</th><th>Điểm ba nhãn</th></tr></thead>
             <tbody>{(status.records ?? []).map((r) => <tr key={r.track_id}><td>{r.track_id.replace('trk-', '#')}</td><td>{r.label ? labelText[r.label] ?? r.label : '—'}</td>
-              <td>{branchText[r.prediction_branch] ?? r.prediction_branch}</td><td>{(r.detector_confidence * 100).toFixed(0)}%</td></tr>)}
-              {(status.records ?? []).length === 0 && <tr><td colSpan={4} className="muted">Chưa phát hiện người nào trong khung hình hiện tại.</td></tr>}</tbody></table>
+              <td>{branchText[r.prediction_branch] ?? r.prediction_branch}</td><td>{scoreText(r.detector_confidence)}</td><td><ClassScores scores={r.class_scores} /></td></tr>)}
+              {(status.records ?? []).length === 0 && <tr><td colSpan={5} className="muted">Chưa phát hiện người nào trong khung hình hiện tại.</td></tr>}</tbody></table></div>
         </div>
       </div>
     </Panel>}

@@ -91,7 +91,7 @@ def build_crops(source: dict[str, Any], canonical_jsonl: Path, raw_root: Path, o
             except json.JSONDecodeError as exc:
                 raise SourceConfigError(f"Invalid split manifest at line {line_number}") from exc
             media_id, split = item.get("media_id"), item.get("split")
-            if not media_id or split not in {"train", "validation", "test"}:
+            if not media_id or split not in {"train", "validation", "test", "heldout", "excluded"}:
                 raise SourceConfigError(f"Split manifest line {line_number} lacks a valid media_id/split")
             if media_id in splits and splits[media_id] != split:
                 raise SourceConfigError(f"Media {media_id} has conflicting split assignments")

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import json
+import hashlib
+import time
 import shutil
 import subprocess
 import sys
@@ -13,6 +16,22 @@ from typing import Callable, Sequence
 from drowning.logging_utils import redact_secrets
 
 _KERNEL_REF = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+(?:/[0-9]+)?$")
+
+
+def validate_checkpoint_dataset(directory: Path, dataset_ref: str, parent: dict) -> None:
+    """Only the pinned model files and dataset metadata may be uploaded."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+/drown-parent-[a-f0-9]{32}", dataset_ref):
+        raise ValueError("invalid private checkpoint dataset reference")
+    files = list(directory.rglob("*"))
+    expected = {"manifest.json", "weights.pt", "dataset-metadata.json"}
+    if {p.name for p in files if p.is_file()} != expected or any(p.is_dir() or p.is_symlink() for p in files):
+        raise ValueError("checkpoint dataset may contain only manifest, weights and metadata")
+    metadata = json.loads((directory / "dataset-metadata.json").read_text(encoding="utf-8"))
+    if metadata.get("id") != dataset_ref:
+        raise ValueError("checkpoint dataset identity mismatch")
+    for name, key in (("manifest.json", "manifest_sha256"), ("weights.pt", "weights_sha256")):
+        if hashlib.sha256((directory / name).read_bytes()).hexdigest() != parent[key]:
+            raise ValueError("checkpoint dataset checksum mismatch")
 
 
 def find_kaggle() -> str | None:
@@ -88,6 +107,22 @@ class KaggleCLIClient:
         if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", dataset_ref):
             raise ValueError("Kaggle dataset ref must be owner/slug")
         return self._invoke(["datasets", "status", dataset_ref])
+
+    def push_private_checkpoint_dataset(self, directory: Path, dataset_ref: str, parent: dict, *,
+                                        sleep: Callable[[float], None] = time.sleep) -> KaggleCommandResult:
+        validate_checkpoint_dataset(directory, dataset_ref, parent)
+        # No --public flag: the official CLI creates a private dataset by default.
+        result = self._invoke(["datasets", "create", "-p", str(directory.resolve()), "-q"],
+                              timeout_seconds=300, operation_may_have_started=True)
+        for attempt in range(12):
+            status = self._invoke(["datasets", "status", dataset_ref], timeout_seconds=15).stdout.strip().strip('"').casefold()
+            if status in {"ready", "datasetstatus.ready"}:
+                return result
+            if status in {"error", "failed", "datasetstatus.error"}:
+                raise KaggleError("Private checkpoint dataset processing failed; kernel was not pushed")
+            if attempt < 11:
+                sleep(5)
+        raise KaggleError("Private checkpoint dataset did not become ready; kernel was not pushed")
 
     def push_private_kernel(self, kernel_dir: Path, *, timeout_seconds: int = 3600,
                             no_run: bool = False) -> KaggleCommandResult:

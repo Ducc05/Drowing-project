@@ -18,7 +18,9 @@ MODES = ("prepare_only", "remote_smoke", "train_candidate")
 BRANCHES = ("temporal", "image_only")
 # The web UI only trains the image head (video frames first, then images); "temporal" stays reachable through the API.
 DEFAULT_OPTIONS = {"pretrained": False, "image_epochs": 5, "temporal_epochs": 5, "branch": "image_only",
-                   "video_epochs": 3, "frame_stride_ms": 500, "max_frames_per_video": 300}
+                   "video_epochs": 3, "frame_stride_ms": 500, "max_frames_per_video": 300,
+                   "continue_from_approved": False, "source_ids": None,
+                   "augment": True, "patience": 3, "holdout_sources": None}
 
 
 _FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -65,6 +67,26 @@ def normalize_options(options: dict | None) -> dict:
         raise ValueError(f"unknown run options: {sorted(unknown)}")
     if not isinstance(merged["pretrained"], bool):
         raise ValueError("pretrained must be true or false")
+    if not isinstance(merged["augment"], bool):
+        raise ValueError("augment must be true or false")
+    if not isinstance(merged["patience"], int) or isinstance(merged["patience"], bool) or not 0 <= merged["patience"] <= 20:
+        raise ValueError("patience must be an integer between 0 (never stop early) and 20")
+    holdout = merged["holdout_sources"]
+    if holdout is not None:
+        if not isinstance(holdout, list) or not holdout or any(not isinstance(s, str) or not s.strip() or len(s) > 160 for s in holdout):
+            raise ValueError("holdout_sources must be null or a nonempty list of source IDs")
+        merged["holdout_sources"] = sorted(set(holdout))
+        if merged["source_ids"] is not None and set(holdout) - set(merged["source_ids"]):
+            raise ValueError("holdout_sources must be among source_ids")
+    if not isinstance(merged["continue_from_approved"], bool):
+        raise ValueError("continue_from_approved must be true or false")
+    if merged["continue_from_approved"] and merged["pretrained"]:
+        raise ValueError("continuation already initializes from the approved checkpoint; disable ImageNet initialization")
+    sources = merged["source_ids"]
+    if sources is not None:
+        if not isinstance(sources, list) or not sources or any(not isinstance(s, str) or not s.strip() or len(s) > 160 for s in sources):
+            raise ValueError("source_ids must be null (all sources) or a nonempty list of source IDs")
+        merged["source_ids"] = sorted(set(sources))
     if merged["branch"] not in BRANCHES:
         raise ValueError(f"branch must be one of {', '.join(BRANCHES)}")
     for key in ("video_epochs",):
@@ -82,13 +104,19 @@ def normalize_options(options: dict | None) -> dict:
     return merged
 
 
-def build_notebook(run_mode: str = "prepare_only", options: dict | None = None) -> dict:
+def build_notebook(run_mode: str = "prepare_only", options: dict | None = None, *,
+                   parent_dataset_ref: str | None = None, parent_model: dict | None = None) -> dict:
     if run_mode not in MODES:
         raise ValueError("run_mode must be prepare_only, remote_smoke, or train_candidate")
     run_options = normalize_options(options)
+    if run_options["continue_from_approved"]:
+        if run_mode != "train_candidate" or not parent_dataset_ref or not parent_model:
+            raise ValueError("continuation requires a pinned approved checkpoint")
+    elif parent_dataset_ref is not None or parent_model is not None:
+        raise ValueError("parent checkpoint supplied for a fresh training run")
     payload = base64.b64encode(source_bundle()).decode("ascii")
     setup_cell = f'''# Generated from the current repository source. Do not edit the embedded bundle by hand.
-import base64, hashlib, io, os, sys, zipfile, importlib.util
+import base64, hashlib, io, os, sys, zipfile, importlib.util, json
 from pathlib import Path
 
 SOURCE_BUNDLE_B64 = {payload!r}
@@ -109,6 +137,23 @@ for _module, _package in (("yaml", "PyYAML"), ("PIL", "Pillow"), ("defusedxml", 
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")  # needed for deterministic CUDA matmuls
 RUN_MODE = os.environ.get("DROWN_RUN_MODE", {run_mode!r})
 RUN_OPTIONS = {run_options!r}
+PARENT_MODEL = {parent_model!r}
+PARENT_DATASET_REF = {parent_dataset_ref!r}
+PARENT_MODEL_DIR = None
+if RUN_OPTIONS.get("continue_from_approved"):
+    _slug = PARENT_DATASET_REF.split("/")[1]
+    _matches = [p for p in INPUT_ROOT.rglob("manifest.json") if _slug in p.parts]
+    if len(_matches) != 1:
+        raise RuntimeError("Expected exactly one attached parent checkpoint manifest")
+    _manifest_path = _matches[0]
+    if hashlib.sha256(_manifest_path.read_bytes()).hexdigest() != PARENT_MODEL["manifest_sha256"]:
+        raise RuntimeError("Pinned parent manifest checksum mismatch")
+    _manifest = json.loads(_manifest_path.read_text(encoding="utf-8"))
+    if str(_manifest["model_version_id"]).replace("-", "") != PARENT_MODEL["id"].replace("-", ""):
+        raise RuntimeError("Pinned parent model identity mismatch")
+    PARENT_MODEL_DIR = _manifest_path.parent
+    if hashlib.sha256((PARENT_MODEL_DIR / "weights.pt").read_bytes()).hexdigest() != PARENT_MODEL["weights_sha256"]:
+        raise RuntimeError("Pinned parent weights checksum mismatch")
 assert RUN_MODE in {{"prepare_only", "remote_smoke", "train_candidate"}}, RUN_MODE
 print({{"run_mode": RUN_MODE, "options": RUN_OPTIONS, "default_mode": "prepare_only", "private_kernel": True}})
 '''
@@ -141,7 +186,9 @@ else:
                                      input_root=INPUT_ROOT, work_dir=SCRATCH_DIR, recipes_dir=WORK_DIR / "configs" / "recipes",
                                      branch=RUN_OPTIONS.get("branch", "image_only"),
                                      frame_stride_ms=RUN_OPTIONS.get("frame_stride_ms", 500),
-                                     max_frames_per_video=RUN_OPTIONS.get("max_frames_per_video", 300))
+                                     max_frames_per_video=RUN_OPTIONS.get("max_frames_per_video", 300),
+                                     only_sources=set(RUN_OPTIONS["source_ids"]) if RUN_OPTIONS.get("source_ids") else None,
+                                     holdout_sources=RUN_OPTIONS.get("holdout_sources"))
     if Path("/kaggle/working").is_dir():
         Path("/kaggle/working/train-input-report.json").write_text(
             json.dumps(inputs["report"], ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -155,6 +202,7 @@ else:
         if not torch.cuda.is_available():
             raise RuntimeError("Candidate training requires the selected Kaggle GPU runtime; no CPU fallback is allowed")
         metrics = run_train_candidate(inputs, device="cuda", options=RUN_OPTIONS,
+                                      parent_bundle_dir=PARENT_MODEL_DIR,
                                       output_dir=Path("/kaggle/working/drowning-candidate"),
                                       archive_path=Path("/kaggle/working/candidate-output.zip"),
                                       code_fingerprint=SOURCE_BUNDLE_SHA256,
@@ -182,6 +230,8 @@ else:
         "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                      "language_info": {"name": "python", "version": "3.11"},
                      "drowning_project": {"run_mode_default": run_mode, "private": True, "training_executor": "kaggle",
+                                          "parent_model": parent_model,
+                                          "parent_dataset_ref": parent_dataset_ref,
                                           "options": run_options}},
         "nbformat": 4,
         "nbformat_minor": 5,

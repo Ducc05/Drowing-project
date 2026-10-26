@@ -91,6 +91,18 @@ Ba cơ chế để mọi người ra cùng kết quả:
 2. **Không train lại thứ đã train:** mỗi yêu cầu `train_candidate` có một mã `training_identity` (băm của dữ liệu, ánh xạ nhãn, recipe, code, tùy chọn, seed). Yêu cầu trùng hệt trả về job/model đã có thay vì train lại. Mã băm code không phụ thuộc máy hay giờ sửa file.
 3. **Train có tính tất định:** seed cố định, thuật toán tất định, xáo dữ liệu có seed. Test cục bộ xác nhận hai lần train cùng đầu vào cho trọng số giống hệt từng bit, đổi seed thì khác. Trên GPU Kaggle chỉ nên kỳ vọng giống hệt khi cùng loại GPU và cùng phiên bản thư viện; Kaggle không cho chọn GPU, nên nếu cần kết quả chắc chắn hãy dùng cơ chế 1 và 2.
 
+## Train tiếp từ model chính
+
+1. Đăng ký dataset mới trong `configs/datasets/`, khai báo ánh xạ nhãn và gắn dataset private vào `KAGGLE_DATASET_SOURCES`. Chạy lại bước chuẩn bị dữ liệu và kiểm tra GPU khi dữ liệu thay đổi.
+2. Ở Tổng quan, đồng bộ model đã duyệt về máy. Chỉ model chính hiện tại được dùng làm gốc; model phải cùng loại và cùng hợp đồng tiền xử lý/kiến trúc với chế độ train.
+3. Ở Train, yêu cầu phiên bản mới, nhập lý do, chọn **Train tiếp model chính**, rồi đánh dấu các dataset dùng trong lượt này. Các dataset không chọn sẽ không được đưa vào training inputs. Chưa có form thêm nguồn dataset trực tiếp trên web.
+4. Job ghim ID và checksum của model gốc, lưu bản sao manifest/trọng số riêng. Khi dispatch, hệ thống tạo một dataset checkpoint **private** trên Kaggle dành riêng cho job, chờ dataset sẵn sàng rồi mới gửi notebook. Notebook chỉ chứa ID/checksum, đọc trọng số từ dataset gắn vào và kiểm tra lại trước khi tạo optimizer mới. Không đưa token Drive vào notebook. Việc duyệt model khác sau khi tạo job không đổi checkpoint của job đã xếp hàng. Nếu upload checkpoint thất bại hoặc chưa sẵn sàng trong thời gian chờ, job thất bại và nhả ô compute; kernel chưa được gửi. Dataset của một upload bị ngắt có thể còn trên tài khoản Kaggle để người dùng dọn sau.
+5. Kết quả là candidate mới, có `parent_model_version`, `parent_weights_sha256` và `initialization=approved_checkpoint` trong hồ sơ. Model chính đang dùng chỉ đổi khi người dùng duyệt candidate mới.
+
+Đây là train tiếp từ trọng số đã học: epoch, optimizer và trạng thái ngẫu nhiên bắt đầu một lượt mới. Gói output hiện tại chưa lưu trạng thái đầy đủ để resume đúng epoch bị ngắt.
+
+API `POST /api/v1/train/submit` nhận thêm `continue_from_approved` (mặc định false) và `source_ids` (null: tất cả nguồn đã đăng ký; danh sách không rỗng: chỉ các nguồn được chọn). Không dùng `pretrained=true` cùng với `continue_from_approved=true`. Preflight trả `capabilities` để giao diện chặn thao tác nếu backend còn chạy phiên bản cũ chưa hỗ trợ các tùy chọn này. Sau khi cập nhật backend, chỉ khởi động lại lúc job hiện tại đã hoàn tất.
+
 ## Dùng chung PostgreSQL cho nhiều người
 1. Tạo PostgreSQL ở nơi cả hai người truy cập được. Cách nhanh: dịch vụ miễn phí như Neon (neon.tech): tạo project, lấy *connection string*.
 2. Đổi đầu chuỗi thành `postgresql+psycopg://` và giữ `?sslmode=require`. Điền cùng một `DATABASE_URL` vào `.env` của mỗi máy. `TEST_DATABASE_URL` giữ trỏ tới database cục bộ riêng.

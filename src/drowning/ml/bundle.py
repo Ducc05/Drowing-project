@@ -106,7 +106,8 @@ def save_bundle(model: DrowningTemporalModel, destination: Path, *, completion_k
             "parent_model_version": parent_model_version,
             "model_version_id": model_version_id,
             "initialization": {"encoder_pretrained": model.pretrained_encoder,
-                               "weights_source": "torchvision_default_imagenet" if model.pretrained_encoder else "random_initialization"},
+                               "weights_source": ("parent_checkpoint" if parent_model_version else
+                                                  "torchvision_default_imagenet" if model.pretrained_encoder else "random_initialization")},
             "model_kind": model_kind,
             "aggregation": aggregation if model_kind == "image_tracked" else None,
             "temporal_trained": bool(temporal_trained),

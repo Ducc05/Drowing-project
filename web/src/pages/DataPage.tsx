@@ -39,7 +39,7 @@ type AutoRules = { outcome: 'pass' | 'blocked'; failed: string[]; warnings: stri
 type GroupSheet = { key: string; kind: 'cross-split' | 'same-split' | 'largest'; rows: number; clusters_in_export: number }
 type SourceRow = { source_id: string; source_version: string; format: string; modality: string; root_exists: boolean; root_env: string }
 
-const classNames: Record<string, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
+const classNames: Record<string, string> = { drowning: 'drowning', swimming: 'swimming', out_of_water: 'out_of_water' }
 
 function SourceReview({ source }: { source: SourceRow }) {
   const [review, setReview] = useState<Review | null>(null)

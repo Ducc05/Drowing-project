@@ -14,5 +14,7 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 360px; min-height: 100vh; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; }
 button { font: inherit; }
+a { color: inherit; }
+:where(a,button,input,select,textarea,[tabindex]):focus-visible { outline: 3px solid #3e8b72; outline-offset: 2px; }

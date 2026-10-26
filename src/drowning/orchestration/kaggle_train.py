@@ -15,7 +15,7 @@ import random
 import time
 import uuid
 import zipfile
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from drowning.data.adapters import convert_to_jsonl
 from drowning.data.audit import audit_jsonl
 from drowning.data.crops import build_crops, build_video_frame_crops
 from drowning.data.grouping import SplitBlocked, build_group_split
+from drowning.data.leakage import near_copy_report
 from drowning.data.registry import SourceConfigError, load_source, validate_source
 from drowning.data.autogroup import assign_automatic_groups
 from drowning.data.review import advisory_mapping_review, is_mapping_approved, mapping_fingerprint, mapping_review
@@ -47,7 +48,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def prepare_training_inputs(*, sources_dir: Path, reviews_dir: Path, input_root: Path, work_dir: Path,
                             recipes_dir: Path, seed: int = 20261026, branch: str = "temporal",
-                            frame_stride_ms: int = 500, max_frames_per_video: int = 300) -> dict[str, Any]:
+                            frame_stride_ms: int = 500, max_frames_per_video: int = 300,
+                            only_sources: set[str] | None = None,
+                            holdout_sources: list[str] | None = None) -> dict[str, Any]:
     if branch not in {"temporal", "image_only"}:
         raise ValueError("branch must be temporal or image_only")
     image_only = branch == "image_only"
@@ -61,6 +64,8 @@ def prepare_training_inputs(*, sources_dir: Path, reviews_dir: Path, input_root:
     for path in sorted(sources_dir.glob("*.yaml")):
         source = load_source(path, reviews_dir)
         source_id = str(source.get("source_id"))
+        if only_sources is not None and source_id not in only_sources:
+            continue
         if validate_source(source):
             excluded[source_id] = "invalid_descriptor"
             continue
@@ -116,11 +121,49 @@ def prepare_training_inputs(*, sources_dir: Path, reviews_dir: Path, input_root:
     except SplitBlocked as exc:
         blockers.append(f"split_blocked: {exc}")
         return {"blockers": blockers, "report": {**report, "blockers": blockers}, "dataset_fingerprint": None}
+    holdout = set(holdout_sources or [])
+    if holdout:
+        # A whole source is kept out of training and used only to measure how the model does on data it never saw
+        # from a different origin. Its images that are byte-identical to a training image are excluded, not scored.
+        if not image_only:
+            raise ValueError("holdout_sources needs the image-only branch")
+        source_of = {m["media_id"]: m.get("source_id") for m in all_media}
+        sha_of = {m["media_id"]: m.get("content_sha256") for m in all_media}
+        present = set(source_of.values())
+        if holdout - present or not (present - holdout):
+            blockers.append("holdout_source_not_found:" + ",".join(sorted(holdout - present)) if holdout - present
+                            else "every_source_is_held_out")
+            return {"blockers": blockers, "report": {**report, "blockers": blockers}, "dataset_fingerprint": None}
+        train_side_hashes = {sha_of[row["media_id"]] for row in split["manifest"]
+                             if source_of.get(row["media_id"]) not in holdout and sha_of.get(row["media_id"])}
+        excluded_duplicates = 0
+        for row in split["manifest"]:
+            if source_of.get(row["media_id"]) in holdout:
+                duplicate = sha_of.get(row["media_id"]) in train_side_hashes
+                row["split"], row["split_reason"] = ("excluded", "exact_duplicate_of_training_image") if duplicate else ("heldout", "held_out_source")
+                excluded_duplicates += int(duplicate)
+        split["media_counts_by_split"] = dict(sorted(Counter(row["split"] for row in split["manifest"]).items()))
+        report["holdout_sources"] = sorted(holdout)
+        report["holdout_exact_duplicates_excluded"] = excluded_duplicates
     split_path = work_dir / "split_manifest.jsonl"
     _write_jsonl(split_path, split["manifest"])
     report["split_media_counts"] = split["media_counts_by_split"]
     report["source_video_disjointness_verified"] = False
     report["split_basis"] = "reviewer-verified groups; the source video of loose images remains unknown"
+    # How many validation / held-out images have a near copy (mirrored or turned too) among the training images.
+    # A lower bound; informational, it never blocks a run.
+    split_of = {row["media_id"]: row["split"] for row in split["manifest"]}
+    leak_paths: dict[str, list[Path]] = defaultdict(list)
+    for item in included:
+        for media_id, media in item["media"].items():
+            if media.get("modality", "image") == "image" and split_of.get(media_id) in {"train", "validation", "heldout"}:
+                leak_paths[split_of[media_id]].append(Path(item["root"]) / media["raw_relative_path"])
+    try:
+        stride = max(1, len(leak_paths["train"]) // 20000)
+        report["leakage_check"] = {name: near_copy_report(leak_paths["train"][::stride], leak_paths[name][::max(1, len(leak_paths[name]) // 4000)])
+                                   for name in ("validation", "heldout") if leak_paths.get(name) and leak_paths.get("train")}
+    except (OSError, ValueError) as exc:
+        report["leakage_check"] = {"error": f"{type(exc).__name__}"}
 
     # -- image crops (one directory per image-bearing source, one merged manifest) ---------------
     crops_root = work_dir / "crops"
@@ -178,17 +221,17 @@ def prepare_training_inputs(*, sources_dir: Path, reviews_dir: Path, input_root:
                    if any(m.get("modality") == "video" for m in i["media"].values())}
 
     # -- coverage -----------------------------------------------------------------------------------
-    image_cov: dict[str, Counter] = {s: Counter() for s in ("train", "validation", "test")}
+    image_cov: dict[str, Counter] = {s: Counter() for s in ("train", "validation", "test", "heldout")}
     for row in crop_rows:
         if row.get("training_eligible") is True:
-            image_cov[row["split"]][row["canonical_label"]] += 1
+            image_cov.setdefault(row["split"], Counter())[row["canonical_label"]] += 1
     window_cov: dict[str, Counter] = {s: Counter() for s in ("train", "validation", "test")}
     for window in windows:
         window_cov[window["split"]][window["label"]] += 1
     video_cov: dict[str, Counter] = {s: Counter() for s in ("train", "validation", "test")}
     for row in video_rows:
         if row.get("training_eligible") is True:
-            video_cov[row["split"]][row["canonical_label"]] += 1
+            video_cov.setdefault(row["split"], Counter())[row["canonical_label"]] += 1
     report["image_crops_by_split"] = {s: dict(c) for s, c in image_cov.items()}
     report["video_frame_crops_by_split"] = {s: dict(c) for s, c in video_cov.items()}
     report["video_frame_sampling"] = {"stride_ms": frame_stride_ms, "max_frames_per_video": max_frames_per_video}
@@ -206,7 +249,8 @@ def prepare_training_inputs(*, sources_dir: Path, reviews_dir: Path, input_root:
     for split_name in SPLITS_NEEDING_ALL_CLASSES:
         for kind, coverage in (("image", image_cov), ("video_frame", video_cov), ("temporal", window_cov)):
             missing = sorted(set(LABELS) - set(coverage[split_name]))
-            if missing and (kind == "image" and crop_rows or kind == "video_frame" and video_rows
+            if missing and (kind == "image" and (image_cov["train"] or image_cov["validation"])
+                            or kind == "video_frame" and (video_cov["train"] or video_cov["validation"])
                             or kind == "temporal" and windows and not image_only):
                 blockers.append(f"{kind}_{split_name}_split_missing_classes:{','.join(missing)}")
     hasher = hashlib.sha256()
@@ -238,7 +282,71 @@ def build_metrics(*, completion_kind: str, candidate_id: str, dataset_fingerprin
             "dataset_fingerprint": dataset_fingerprint, "test_split_used": False, **extra}
 
 
-def _train_two_stage(inputs: dict[str, Any], *, device: str, options: dict[str, Any], seed: int) -> dict[str, Any]:
+def initialize_training_model(inputs: dict[str, Any], *, device: str, options: dict[str, Any],
+                              parent_bundle_dir: Path | None = None):
+    """Initialize fresh weights or load one verified parent; optimizers are always new."""
+    from drowning.ml.bundle import load_bundle
+    from drowning.ml.model import DrowningTemporalModel
+
+    continuing = bool(options.get("continue_from_approved"))
+    if continuing != (parent_bundle_dir is not None):
+        raise ValueError("continuation requires exactly one pinned parent checkpoint")
+    if not continuing:
+        return DrowningTemporalModel(hidden_size=int(inputs["recipes"][1]["model"]["hidden_size"]),
+                                      pretrained_encoder=bool(options.get("pretrained"))).to(device)
+    if options.get("pretrained"):
+        raise ValueError("disable ImageNet initialization when continuing a checkpoint")
+    model, manifest = load_bundle(parent_bundle_dir, require_temporal=True, map_location=device)
+    expected_kind = "image_tracked" if options.get("branch", "temporal") == "image_only" else "temporal"
+    if manifest.get("model_kind", "temporal") != expected_kind:
+        raise ValueError("parent checkpoint model kind does not match the training branch")
+    cfg = inputs["recipes"][0]["input"]
+    preprocessing = manifest["preprocessing"]
+    actual_size = preprocessing["size"]
+    actual_size = [actual_size, actual_size] if isinstance(actual_size, int) else actual_size
+    if (actual_size != cfg["size"] or preprocessing["mean"] != cfg["mean"]
+            or preprocessing["std"] != cfg["std"] or preprocessing["context_fraction"] != cfg["crop_context_fraction"]):
+        raise ValueError("parent checkpoint preprocessing differs from the training recipe")
+    if int(manifest["hidden_size"]) != int(inputs["recipes"][1]["model"]["hidden_size"]):
+        raise ValueError("parent checkpoint architecture differs from the training recipe")
+    if expected_kind == "temporal":
+        sampling = inputs["recipes"][1]["sampling"]
+        expected = {key: int(sampling[key]) for key in ("sequence_length", "sample_period_ms", "max_track_gap_ms")}
+        if any(manifest["temporal_contract"].get(key) != value for key, value in expected.items()):
+            raise ValueError("parent checkpoint temporal sampling differs from the training recipe")
+    return model.to(device)
+
+
+def _validation_samples(data: dict[str, Any], heldout_sets: dict[str, Any], limit: int = 3000) -> dict[str, list[dict[str, Any]]]:
+    """Which validation / held-out crops were scored (source file, box, label), so another model can be scored on the same ones.
+
+    Kept compact and sampled evenly when large; it travels in the run's metrics.json and is not stored in the registry.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    pools = {f"{name}:validation": sets["val"].rows for name, sets in data.items()}
+    pools.update({f"{name}:heldout": dataset.rows for name, dataset in heldout_sets.items()})
+    for key, rows in pools.items():
+        stride = max(1, -(-len(rows) // limit))
+        out[key] = [{"s": row.get("source_id"), "p": row.get("source_relative_path"), "f": row.get("frame_index"),
+                     "b": [round(float(v), 1) for v in row["bbox_xyxy"]], "l": row["canonical_label"]} for row in rows[::stride]]
+    return out
+
+
+def _evaluate_by_source(model: Any, dataset: Any, *, batch: int, device: str) -> dict[str, Any]:
+    """Accuracy, per-class recall and confusion matrix for each originating source, so one source cannot hide another."""
+    from torch.utils.data import DataLoader, Subset
+
+    from drowning.ml.training import evaluate_image_model
+
+    indices: dict[str, list[int]] = defaultdict(list)
+    for index, row in enumerate(dataset.rows):
+        indices[str(row.get("source_id") or "unknown")].append(index)
+    return {source: evaluate_image_model(model, DataLoader(Subset(dataset, members), batch_size=batch, shuffle=False, num_workers=0),
+                                         device=device) for source, members in sorted(indices.items())}
+
+
+def _train_two_stage(inputs: dict[str, Any], *, device: str, options: dict[str, Any], seed: int,
+                     parent_bundle_dir: Path | None = None) -> dict[str, Any]:
     """Image stage then causal temporal stage (needs labeled video windows)."""
     import torch
     from torch.utils.data import DataLoader
@@ -267,8 +375,7 @@ def _train_two_stage(inputs: dict[str, Any], *, device: str, options: dict[str, 
             "window_train": DataLoader(window_train, batch_size=temporal_batch, shuffle=True, num_workers=0,
                                        generator=torch.Generator().manual_seed(seed + 1)),
             "window_val": DataLoader(window_val, batch_size=temporal_batch, shuffle=False, num_workers=0)}
-        model = DrowningTemporalModel(hidden_size=int(temporal_recipe["model"]["hidden_size"]),
-                                      pretrained_encoder=bool(options.get("pretrained"))).to(device)
+        model = initialize_training_model(inputs, device=device, options=options, parent_bundle_dir=parent_bundle_dir)
         image_epochs, temporal_epochs = int(options.get("image_epochs", 5)), int(options.get("temporal_epochs", 5))
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(image_recipe["training"]["learning_rate"]))
         stage_a = [train_stage_a_epoch(model, loaders["image_train"], optimizer, device=device, class_weights=image_weights)
@@ -293,7 +400,8 @@ def _train_two_stage(inputs: dict[str, Any], *, device: str, options: dict[str, 
                         "forgetting_check": "image_validation_after_stage_a vs image_validation shows what stage B did to the image head"}}
 
 
-def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str, Any], seed: int) -> dict[str, Any]:
+def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str, Any], seed: int,
+                      parent_bundle_dir: Path | None = None) -> dict[str, Any]:
     """Image head only. Phase 1 uses frames cut from labeled videos (when there are any), phase 2 uses loose images.
 
     The images come last on purpose: they are the more numerous and varied data, and the video phase gives the
@@ -314,15 +422,17 @@ def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str,
     phases = inputs["report"]["training_phases"]
     manifests = {"video_frames": paths["video_crop_manifest"], "images": paths["crop_manifest"]}
     epochs = {"video_frames": int(options.get("video_epochs", 3)), "images": int(options.get("image_epochs", 5))}
-    data = {name: {"train": CanonicalImageCropDataset(manifests[name], split="train", **kwargs),
+    augment = bool(options.get("augment", True))
+    data = {name: {"train": CanonicalImageCropDataset(manifests[name], split="train", augment=augment, augment_seed=seed, **kwargs),
                    "val": CanonicalImageCropDataset(manifests[name], split="validation", **kwargs)} for name in phases}
-    model = DrowningTemporalModel(hidden_size=int(temporal_recipe["model"]["hidden_size"]),
-                                  pretrained_encoder=bool(options.get("pretrained"))).to(device)
+    model = initialize_training_model(inputs, device=device, options=options, parent_bundle_dir=parent_bundle_dir)
 
     def validate(name: str) -> dict[str, Any]:
         return evaluate_image_model(model, DataLoader(data[name]["val"], batch_size=batch, shuffle=False, num_workers=0), device=device)
 
     histories: dict[str, list] = {}
+    selection: dict[str, Any] = {}
+    patience = int(options.get("patience", 3))
     weights: dict[str, Any] = {}
     after_phase: dict[str, dict[str, Any]] = {}
     before_images = None
@@ -331,12 +441,41 @@ def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str,
         weights[name] = torch.tensor(class_weights(Counter(r["canonical_label"] for r in train_set.rows)), device=device)
         loader = DataLoader(train_set, batch_size=batch, shuffle=True, num_workers=0, generator=torch.Generator().manual_seed(seed + index))
         optimizer = torch.optim.AdamW(model.parameters(), lr=float(image_recipe["training"]["learning_rate"]))
-        histories[name] = [train_stage_a_epoch(model, loader, optimizer, device=device, class_weights=weights[name])
-                           for _ in range(epochs[name])]
+        history: list[dict[str, Any]] = []
+        best_state, best_score, best_epoch, stale = None, -1.0, 0, 0
+        for epoch in range(epochs[name]):
+            train_set.set_epoch(epoch)
+            history.append(train_stage_a_epoch(model, loader, optimizer, device=device, class_weights=weights[name]))
+            score = float(validate(name)["macro_f1"])
+            history[-1]["validation_macro_f1"] = round(score, 4)
+            if score > best_score + 1e-4:
+                best_score, best_epoch, stale = score, epoch + 1, 0
+                best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+            else:
+                stale += 1
+                if patience > 0 and stale >= patience:
+                    break
+        if best_state is not None:
+            model.load_state_dict(best_state)  # keep the epoch with the best validation macro-F1, not the last one
+        selection[name] = {"best_epoch": best_epoch, "epochs_run": len(history), "epochs_requested": epochs[name],
+                           "best_validation_macro_f1": round(best_score, 4), "early_stopped": len(history) < epochs[name]}
+        histories[name] = history
         after_phase[name] = validate(name)
         if name == "video_frames" and "images" in data:
             before_images = validate("images")
     final = {name: validate(name) for name in phases}
+    by_source = {name: _evaluate_by_source(model, data[name]["val"], batch=batch, device=device) for name in phases}
+    heldout: dict[str, Any] = {}
+    heldout_sets: dict[str, Any] = {}
+    for name, manifest in manifests.items():
+        try:
+            heldout_set = CanonicalImageCropDataset(manifest, split="heldout", **kwargs)
+        except ValueError:
+            continue  # no held-out rows in this manifest
+        heldout_sets[name] = heldout_set
+        heldout[name] = {"samples": len(heldout_set), "overall": evaluate_image_model(
+            model, DataLoader(heldout_set, batch_size=batch, shuffle=False, num_workers=0), device=device),
+            "by_source": _evaluate_by_source(model, heldout_set, batch=batch, device=device)}
     results: dict[str, Any] = {
         "training_phases": phases, "temporal_stage_history": [], "temporal_validation": None, "forgetting_check": None,
         "image_stage_history": histories.get("images", []), "video_frame_stage_history": histories.get("video_frames", []),
@@ -344,7 +483,13 @@ def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str,
         # What the encoder scored on loose images right after the video phase, before any image was trained on.
         "image_validation_after_stage_a": before_images,
         "video_frame_validation_after_video_phase": after_phase.get("video_frames"),
-        "image_validation_after_image_phase": after_phase.get("images")}
+        "image_validation_after_image_phase": after_phase.get("images"),
+        "epoch_selection": selection,
+        "epoch_selection_note": ("The reported validation is the one the epoch was chosen on, so it is slightly optimistic. "
+                                 "Held-out sources and the untouched test split are never used for selection."),
+        "validation_by_source": by_source, "heldout": heldout or None,
+        "validation_samples": _validation_samples(data, heldout_sets),
+        "augmentation": {"enabled": augment, "applied_to": "train split only", "seeded": True}}
     samples = {"image_train": len(data["images"]["train"]) if "images" in data else 0,
                "image_validation": len(data["images"]["val"]) if "images" in data else 0,
                "video_frames_train": len(data["video_frames"]["train"]) if "video_frames" in data else 0,
@@ -361,7 +506,7 @@ def _train_image_only(inputs: dict[str, Any], *, device: str, options: dict[str,
 
 def run_train_candidate(inputs: dict[str, Any], *, device: str, options: dict[str, Any], output_dir: Path,
                         archive_path: Path, code_fingerprint: str, job_context: dict[str, Any] | None = None,
-                        seed: int = 20261026) -> dict[str, Any]:
+                        seed: int = 20261026, parent_bundle_dir: Path | None = None) -> dict[str, Any]:
     contract_test = bool(options.get("contract_test"))
     image_only = options.get("branch", "temporal") == "image_only"
     if (inputs["report"].get("branch", "temporal") == "image_only") != image_only:
@@ -385,7 +530,9 @@ def run_train_candidate(inputs: dict[str, Any], *, device: str, options: dict[st
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     started = time.time()
-    trained = (_train_image_only if image_only else _train_two_stage)(inputs, device=device, options=options, seed=seed)
+    parent = json.loads((parent_bundle_dir / "manifest.json").read_text(encoding="utf-8")) if parent_bundle_dir else None
+    trained = (_train_image_only if image_only else _train_two_stage)(inputs, device=device, options=options, seed=seed,
+                                                                    parent_bundle_dir=parent_bundle_dir)
     model = trained["model"]
 
     recipe_fingerprint = hashlib.sha256(json.dumps([image_recipe, temporal_recipe], sort_keys=True).encode()).hexdigest()
@@ -402,6 +549,7 @@ def run_train_candidate(inputs: dict[str, Any], *, device: str, options: dict[st
                 dataset_fingerprint=inputs["dataset_fingerprint"], recipe_fingerprint=recipe_fingerprint,
                 code_fingerprint=code_fingerprint, training_job_id=context.get("training_job_id"),
                 remote_kernel_ref=context.get("kernel_ref"), remote_kernel_version=context.get("kernel_version"),
+                parent_model_version=parent.get("model_version_id") if parent else None,
                 model_version_id=candidate_id,
                 temporal_contract=None if image_only else {
                     "sequence_length": int(sampling["sequence_length"]), "sample_period_ms": int(sampling["sample_period_ms"]),
@@ -411,6 +559,10 @@ def run_train_candidate(inputs: dict[str, Any], *, device: str, options: dict[st
         model_kind="image_tracked" if image_only else "temporal", branch="image_only" if image_only else "temporal",
         device=torch.cuda.get_device_name(0) if device == "cuda" else "cpu-contract-test",
         pretrained_encoder=bool(options.get("pretrained")), seed=seed, wall_seconds=round(time.time() - started, 1),
+        initialization="approved_checkpoint" if parent else ("imagenet" if options.get("pretrained") else "random"),
+        parent_model_version=parent.get("model_version_id") if parent else None,
+        parent_weights_sha256=parent["files"]["weights.pt"]["sha256"] if parent else None,
+        optimizer_reset=True,
         **trained["epochs"], class_weights_from_train_split=trained["class_weights"], samples=trained["samples"],
         **trained["results"],
         determinism={"seed": seed, "deterministic_algorithms": True, "cudnn_deterministic": True, "cudnn_benchmark": False,

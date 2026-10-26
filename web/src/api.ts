@@ -40,6 +40,9 @@ export const post = <T,>(path: string, body?: unknown) =>
 
 export const fmt = (value: number | undefined | null) => new Intl.NumberFormat('vi-VN').format(value ?? 0)
 export const pct = (value: number | undefined | null) => (value == null ? '—' : `${(value * 100).toFixed(1)}%`)
+/** Raw model score on the 0–1 scale; separate from detector thresholds and metric percentages. */
+export const scoreText = (value: number | undefined | null) => (value == null || !Number.isFinite(value) ? '—' : value.toFixed(3))
+export const SCORE_LABELS = ['drowning', 'swimming', 'out_of_water'] as const
 export const when = (value: string) => new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 export const newKey = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
 

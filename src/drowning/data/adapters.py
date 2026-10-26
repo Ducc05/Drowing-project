@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -80,6 +81,33 @@ def _safe_provenance(source: dict[str, Any]) -> dict[str, Any]:
     return safe
 
 
+class _RegexGroupMap(dict):
+    """Group id taken from the first capture group of ``path_regex`` applied to the file's relative path.
+
+    Export tools such as Roboflow put the source video (and frame number) in the file name, so every
+    augmented copy and every frame of one video can be kept in one split. This is read from the name, not
+    confirmed by anyone, and the records say so (``grouping_assurance``).
+    """
+    assurance = "filename_pattern_unconfirmed"
+
+    def __init__(self, pattern: str, prefix: str):
+        super().__init__()
+        try:
+            self._regex = re.compile(pattern)
+        except re.error as exc:
+            raise SourceConfigError(f"grouping.path_regex is not a valid regular expression: {exc}") from exc
+        if self._regex.groups < 1:
+            raise SourceConfigError("grouping.path_regex needs one capture group naming the source")
+        self._prefix = prefix
+
+    def __bool__(self) -> bool:
+        return True
+
+    def get(self, key, default=None):  # type: ignore[override]
+        match = self._regex.search(Path(key).as_posix())
+        return self._prefix + match.group(1) if match and match.group(1) else default
+
+
 def _load_grouping_map(source: dict[str, Any], root: Path) -> dict[str, str]:
     reviewed = source.get("_reviewed_groups")
     if isinstance(reviewed, dict) and reviewed:
@@ -87,6 +115,8 @@ def _load_grouping_map(source: dict[str, Any], root: Path) -> dict[str, str]:
         return {Path(key).as_posix(): value for key, value in reviewed.items()
                 if isinstance(value, str) and value.strip()}
     grouping = source.get("grouping", {})
+    if isinstance(grouping, dict) and isinstance(grouping.get("path_regex"), str) and grouping["path_regex"]:
+        return _RegexGroupMap(grouping["path_regex"], f"{source['source_id']}:")
     if not isinstance(grouping, dict) or not grouping.get("metadata_file"):
         return {}
     metadata_path = _safe_file(root, grouping["metadata_file"])
@@ -130,6 +160,7 @@ def _media_record(source: dict[str, Any], root: Path, image_path: Path, relative
         "original_export_split": original_export_split,
         "global_group_id": global_group_id,
         "grouping_status": "verified" if global_group_id else "unknown",
+        **({"grouping_assurance": grouping_map.assurance} if global_group_id and isinstance(grouping_map, _RegexGroupMap) else {}),
         "domain": source.get("domain"),
         "viewpoint": source.get("viewpoint"),
         "overlay_present": None,

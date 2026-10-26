@@ -158,11 +158,15 @@ class TrainService:
             effective = [b for b in entry["blocked_by"] if not b.startswith("an approved model already exists")]
             entry["allowed"] = not effective
         return {
+            "capabilities": {"continue_from_approved": True, "source_selection": True},
             "environment": environment, "sources": sources, "stale_sources": stale,
             "latest_prepare": self._run_view(prepare), "latest_smoke": self._run_view(smoke),
             "latest_job": ({"job_id": str(recent.id), "mode": (recent.payload or {}).get("mode"), "state": recent.state}
                            if recent else None),
-            "approved_model": ({"id": str(approved.id), "display_version": approved.display_version} if approved else None),
+            "approved_model": ({"id": str(approved.id), "display_version": approved.display_version,
+                                "model_kind": approved.model_kind,
+                                "cached_locally": (Path(self.settings.approved_model_bundle_dir) / str(approved.id) / "manifest.json").is_file()}
+                               if approved else None),
             "compute_slot_held_by": ({"job_id": str(active.id), "job_type": active.job_type,
                                       "mode": (active.payload or {}).get("mode") or (active.payload or {}).get("modality"),
                                       "state": active.state} if active else None),
@@ -190,7 +194,7 @@ class TrainService:
                     "recipes": [hashlib.sha256((recipes / name).read_bytes().replace(bytes([13, 10]), bytes([10]))).hexdigest()
                                 for name in ("image.yaml", "temporal.yaml")],
                     "code": self._notebook_builder().source_bundle_sha256(), "options": payload.get("options"),
-                    "seed": 20261026}
+                    "seed": 20261026, "parent_model": payload.get("parent_model")}
         return hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
 
     def _active_run(self, mode: str, idempotency_key: str) -> dict[str, Any] | None:
@@ -224,12 +228,56 @@ class TrainService:
             digest.update(f"{entry['source_id']}|{entry.get('canonical_sha256')}|{entry.get('mapping_hash')}\n".encode())
         return digest.hexdigest()
 
+    def _parent_checkpoint(self, approved: dict[str, Any] | None, branch: str) -> tuple[Path, dict[str, Any]]:
+        """Capture the single approved model; never download or change the registry during submission."""
+        from drowning.api.inference import get_approved_model, InferenceUnavailable
+        from drowning.api.model_sync import _check_identity
+        from drowning.ml.bundle import load_bundle
+
+        if not approved:
+            raise TrainBlocked(["Train tiếp cần một model chính đã duyệt."])
+        try:
+            with self.factory() as session:
+                model, directory, _ = get_approved_model(session, self.settings, pinned_model_id=UUID(approved["id"]))
+                if model.status != "approved":
+                    raise ValueError("model chính đã thay đổi; tải lại trang Train")
+                expected = "image_tracked" if branch == "image_only" else "temporal"
+                if model.model_kind != expected:
+                    raise ValueError("loại model gốc không khớp chế độ train")
+                loaded, manifest = load_bundle(directory, require_temporal=True, map_location="cpu")
+                del loaded
+                _check_identity(manifest, model)
+                weights_sha = manifest["files"]["weights.pt"]["sha256"]
+                recorded_sha = (model.metrics or {}).get("provenance", {}).get("weights_sha256")
+                if recorded_sha and weights_sha != recorded_sha:
+                    raise ValueError("checkpoint khác checksum đã đăng ký")
+                return directory, {"id": str(model.id), "model_kind": model.model_kind,
+                                   "weights_sha256": weights_sha,
+                                   "manifest_sha256": hashlib.sha256((directory / "manifest.json").read_bytes()).hexdigest()}
+        except (InferenceUnavailable, ValueError, OSError, RuntimeError) as exc:
+            raise TrainBlocked([f"Không thể nạp model gốc: {exc}. Đồng bộ model đã duyệt về máy trước."]) from exc
+
     def submit(self, mode: str, *, new_version: bool, reason: str, idempotency_key: str,
                options: dict[str, Any] | None = None) -> dict[str, Any]:
         if mode not in MODES:
             raise TrainBlocked([f"mode must be one of {', '.join(MODES)}"])
         if len(idempotency_key.strip()) < 8:
             raise TrainBlocked(["idempotency_key must contain at least eight characters"])
+        with self.factory() as session:
+            prior = session.scalar(select(Job).where(Job.idempotency_key == idempotency_key))
+            if prior is not None:
+                old = prior.payload or {}
+                same = (old.get("executor") == "kaggle" and old.get("mode") == mode
+                        and old.get("new_version") == bool(new_version) and old.get("reason") == reason.strip())
+                if mode == "train_candidate":
+                    try:
+                        same = same and self._notebook_builder().normalize_options(old.get("options")) == self._notebook_builder().normalize_options(options)
+                    except ValueError as exc:
+                        raise TrainBlocked([str(exc)]) from exc
+                if not same:
+                    raise TrainBlocked(["Idempotency-Key is already associated with a different training request"])
+                return {"status": "duplicate_request", "created": False,
+                        "job": {"id": str(prior.id), "state": prior.state, "mode": mode}}
         view = self.preflight()
         if mode == "train_candidate" and view["approved_model"] and not new_version:
             return {"status": "model_available", "job": None, "approved_model": view["approved_model"],
@@ -246,6 +294,10 @@ class TrainService:
                 blocked.append("train_candidate must be requested as an explicit new version")
             if len(reason.strip()) < 10:
                 blocked.append("a reason (10+ characters) is required for a new model version")
+            if chosen.get("source_ids") is not None:
+                unknown = set(chosen["source_ids"]) - {row["source_id"] for row in view["sources"]}
+                if unknown:
+                    blocked.append("unknown dataset source IDs: " + ", ".join(sorted(unknown)))
         if blocked:
             raise TrainBlocked(blocked)
         # Kaggle's push timeout is the kernel's maximum run time, so training needs far longer than a check.
@@ -262,7 +314,13 @@ class TrainService:
             except (ValueError, KeyError) as exc:
                 raise TrainBlocked([f"invalid training options: {exc}"]) from exc
         summary = (view["latest_prepare"] or {}).get("summary") or {}
+        parent_dir = None
         if mode == "train_candidate":
+            if payload["options"]["continue_from_approved"]:
+                parent_dir, payload["parent_model"] = self._parent_checkpoint(view["approved_model"], payload["options"]["branch"])
+            selected = payload["options"].get("source_ids")
+            if selected is not None:
+                summary = {**summary, "sources": [s for s in summary.get("sources", []) if s["source_id"] in selected]}
             payload.update(dataset_fingerprint=self._dataset_fingerprint(summary), preflight={
                 "ready": True, "review_mode": view["review_mode"],
                 "mapping_review_approved": all(s["mapping_approved"] for s in view["sources"]),
@@ -278,10 +336,14 @@ class TrainService:
         if created:
             kernel_root = Path(self.settings.kaggle_kernel_dir).expanduser()
             target = kernel_root / "jobs" / f"{str(job.id)[:8]}-{mode}"
+            parent_dataset_ref = (self.settings.kaggle_kernel_ref.split("/")[0] + "/drown-parent-" + job.id.hex
+                                  if parent_dir is not None else None)
             try:
                 path = self._materializer().materialize_kernel(self.settings.kaggle_kernel_ref, target, mode=mode,
                                                                dataset_sources=list(self.settings.kaggle_dataset_sources),
-                                                               options=payload.get("options"))
+                                                               options=payload.get("options"), parent_bundle_dir=parent_dir,
+                                                               parent_model=payload.get("parent_model"),
+                                                               parent_dataset_ref=parent_dataset_ref)
             except Exception as exc:
                 with self.factory() as session:
                     transition_job(session, job.id, JobState.FAILED, event_type="kernel_materialization_failed",
@@ -289,7 +351,8 @@ class TrainService:
                 raise TrainBlocked([f"could not prepare the Kaggle kernel files ({type(exc).__name__}: {exc})"]) from exc
             with self.factory() as session:
                 stored = session.get(Job, job.id)
-                stored.payload = {**stored.payload, "kernel_dir": str(path.resolve())}
+                stored.payload = {**stored.payload, "kernel_dir": str(path.resolve()),
+                                  "parent_dataset_ref": parent_dataset_ref}
                 session.commit()
                 session.refresh(stored)
                 job = stored

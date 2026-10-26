@@ -42,7 +42,7 @@ function duration(start?: string, end?: string) {
   const seconds = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000)
   return seconds < 120 ? `${seconds} giây` : `${Math.round(seconds / 60)} phút`
 }
-const classText: Record<string, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
+const classText: Record<string, string> = { drowning: 'drowning', swimming: 'swimming', out_of_water: 'out_of_water' }
 
 function SourceBlock({ entry, detail }: { entry: SourceEntry; detail?: { quality: Quality } }) {
   const quality = detail?.quality

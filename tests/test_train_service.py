@@ -18,7 +18,7 @@ from drowning.api.train import TrainBlocked, TrainService
 from drowning.config import Settings
 from drowning.data.registry import load_source
 from drowning.data.review import record_grouping_review, record_mapping_review
-from drowning.db.models import Base, ExecutionSlot, Job, ModelRegistry, ModelVersion
+from drowning.db.models import Artifact, Base, ExecutionSlot, Job, ModelRegistry, ModelVersion
 from drowning.orchestration.kaggle_dispatch import KaggleJobDispatcher
 from drowning.orchestration.kaggle_run import run_prepare
 from drowning.orchestration.run_collector import summarize_report
@@ -303,6 +303,84 @@ class TrainServiceTests(unittest.TestCase):
         queued = service.submit("train_candidate", new_version=True, reason="Retrain with new reviewed videos",
                                 idempotency_key="train-request-5")
         self.assertEqual(queued["status"], "queued")
+
+    def test_continuation_pins_the_approved_checkpoint_and_selected_datasets(self):
+        from tests.test_training_continuation import make_parent_bundle
+
+        cache, model_id = self.base / "cache", uuid4()
+        _, manifest, _ = make_parent_bundle(cache / str(model_id), str(model_id))
+        with self.factory() as session:
+            origin = Job(job_type="train", state="completed", phase="complete", idempotency_key="parent-training", payload={})
+            session.add(origin)
+            session.flush()
+            artifact = Artifact(job_id=origin.id, role="candidate_bundle", storage_provider="google_drive",
+                                remote_file_id="fixture-parent", sha256="a" * 64, size_bytes=123, status="ready")
+            session.add(artifact)
+            session.flush()
+            session.add(ModelVersion(id=model_id, model_family=manifest["model_family"], display_version="base-v1",
+                                     schema_version=1, class_keys=manifest["class_keys"], temporal_trained=False,
+                                     completion_kind="candidate", status="approved", artifact_id=artifact.id,
+                                     dataset_fingerprint=manifest["dataset_fingerprint"], metrics={"model_kind": "image_tracked"}))
+            session.flush()
+            session.add(ModelRegistry(model_family=manifest["model_family"], approved_model_id=model_id, generation=1))
+            session.commit()
+        self.completed_prepare()
+        self.completed_smoke()
+        service = self.service(env={"APPROVED_MODEL_BUNDLE_DIR": str(cache)}, mode="advisory")
+        source_id = service.preflight()["sources"][0]["source_id"]
+        result = service.submit("train_candidate", new_version=True, reason="Continue with the selected new data",
+                                idempotency_key="continue-parent-1",
+                                options={"continue_from_approved": True, "source_ids": [source_id]})
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(result["job"]["id"]))
+        self.assertEqual(job.payload["parent_model"]["id"], str(model_id))
+        self.assertEqual(job.payload["options"]["source_ids"], [source_id])
+        path = Path(job.payload["kernel_dir"])
+        notebook_path = path / "Drowning_Temporal_Kaggle.ipynb"
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        self.assertEqual(notebook["metadata"]["drowning_project"]["parent_model"], job.payload["parent_model"])
+        self.assertEqual(notebook["metadata"]["drowning_project"]["parent_dataset_ref"], job.payload["parent_dataset_ref"])
+        kernel_metadata = json.loads((path / "kernel-metadata.json").read_text(encoding="utf-8"))
+        self.assertIn(job.payload["parent_dataset_ref"], kernel_metadata["dataset_sources"])
+        dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
+        dispatcher._validate_job(job, path)
+        with self.factory() as session:
+            session.get(ModelVersion, model_id).status = "superseded"
+            session.get(ModelRegistry, manifest["model_family"]).approved_model_id = None
+            session.commit()
+        replay = service.submit("train_candidate", new_version=True, reason="Continue with the selected new data",
+                                idempotency_key="continue-parent-1",
+                                options={"continue_from_approved": True, "source_ids": [source_id]})
+        self.assertEqual(replay["job"]["id"], str(job.id))
+        with self.assertRaisesRegex(TrainBlocked, "different training request"):
+            service.submit("train_candidate", new_version=True, reason="Continue with the selected new data",
+                           idempotency_key="continue-parent-1", options={"continue_from_approved": False})
+        notebook["metadata"]["drowning_project"]["parent_model"]["id"] = str(uuid4())
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "parent checkpoint"):
+            dispatcher._validate_job(job, path)
+        notebook["metadata"]["drowning_project"]["parent_model"] = job.payload["parent_model"]
+        notebook_path.write_text(json.dumps(notebook), encoding="utf-8")
+        from drowning.integrations.kaggle import KaggleError
+        class FailedUpload(FakeKaggle):
+            def version(self): pass
+            def push_private_checkpoint_dataset(self, *args): raise KaggleError("fixture upload failed")
+            def push_private_kernel(self, *args, **kwargs): raise AssertionError("kernel must not start after upload failure")
+        failed = KaggleJobDispatcher(self.factory, FailedUpload(), worker_id="w").dispatch(job.id, path)
+        self.assertEqual(failed.state, "failed")
+        with self.factory() as session:
+            self.assertIsNone(session.get(ExecutionSlot, 1).job_id)
+
+    def test_continuation_without_an_approved_model_and_unknown_sources_are_blocked(self):
+        self.completed_prepare()
+        self.completed_smoke()
+        service = self.service(mode="advisory")
+        with self.assertRaises(TrainBlocked):
+            service.submit("train_candidate", new_version=True, reason="Continue the approved model",
+                           idempotency_key="no-parent-1", options={"continue_from_approved": True})
+        with self.assertRaisesRegex(TrainBlocked, "unknown dataset"):
+            service.submit("train_candidate", new_version=True, reason="Train new dataset selection",
+                           idempotency_key="unknown-source-1", options={"source_ids": ["missing"]})
 
     def test_cancel_only_before_dispatch(self):
         service = self.service()

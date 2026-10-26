@@ -1,5 +1,6 @@
 /* Pages added after the overview: Data review, Train, Evaluation, Camera. Readable sizes (13px base). */
 .page-stack { display: flex; flex-direction: column; gap: 18px; font-size: 13px; line-height: 1.5; }
+.page-stack code,.callout code,.data-table code { overflow-wrap: anywhere; word-break: break-word; }
 .page-head h1 { margin: 8px 0 6px; }
 .page-head .subtitle { font-size: 13px; max-width: 880px; }
 .page-panel { padding: 20px 22px 22px; }
@@ -20,6 +21,10 @@ code { background: #eef1f6; border-radius: 4px; padding: 1px 5px; font: 12px var
 .tag-warn { color: #96682a; background: #fff2dc; }
 .tag-bad { color: #9b4745; background: #fdebe8; }
 .tag-info { color: #43648c; background: #e9f0f9; }
+.class-scores { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 5px; min-width: 190px; }
+.class-score { display: inline-flex; gap: 6px; align-items: center; border: 1px solid #dfe6ed; border-radius: 5px; padding: 3px 6px; background: #f7f9fb; color: #5d6a82; font: 11px var(--mono); }
+.class-score b { color: #263c55; font-variant-numeric: tabular-nums; font-weight: 700; }
+.score-panel { display: flex; flex-direction: column; gap: 8px; }
 .callout { padding: 10px 13px; border-radius: 8px; font-size: 12.5px; }
 .callout.ok { background: #e9f7f1; color: #2f6e5a; border: 1px solid #cfeadf; }
 .callout.warn { background: #fff6e6; color: #86602b; border: 1px solid #f3dfb8; }
@@ -70,7 +75,7 @@ code { background: #eef1f6; border-radius: 4px; padding: 1px 5px; font: 12px var
 
 .mapping-card { border: 1px solid #e6eaf0; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .mapping-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; }
-.sheet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.sheet-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 14px; }
 .sheet-grid figure { margin: 0; display: flex; flex-direction: column; gap: 6px; }
 .sheet-grid img { width: 100%; height: auto; border-radius: 8px; background: #20262c; image-rendering: auto; }
 .sheet-grid figcaption { font-size: 12px; color: #5d6a82; }
@@ -119,12 +124,31 @@ details summary { cursor: pointer; font-size: 12.5px; color: #43648c; }
 .camera-layout { display: grid; grid-template-columns: minmax(280px, 1.5fr) minmax(260px, 1fr); gap: 16px; align-items: start; }
 .camera-view { width: 100%; border-radius: 10px; background: #172238; min-height: 200px; }
 .camera-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+fieldset { min-width: 0; margin: 0; border: 1px solid #e6eaf0; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; }
+fieldset legend { padding: 0 6px; color: #5d6a82; font-size: 12px; font-weight: 650; }
+table.data-table { max-width: 100%; }
+.page-panel .panel-kicker,.page-head .eyebrow { font-size: 9px; }
 
 @media (max-width: 900px) {
   .review-layout, .camera-layout { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: minmax(110px, 150px) minmax(0, 1fr); }
   .bar-value { grid-column: 1 / -1; }
   .timeline li { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .page-head h1 { font-size: 25px; }
+  .panel { padding: 14px 12px; }
+  .panel-header { flex-wrap: wrap; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 6px 9px; }
+  .bar-track { grid-column: 1 / -1; grid-row: 2; }
+  .bar-value { grid-column: auto; grid-row: 1; }
+  .review-layout video { max-height: 320px; }
+  .mark-row > * { min-width: 0; }
+  .time-pick { flex: 1 1 120px; }
+  .media-dropzone { flex-direction: column; align-items: stretch; }
+  .image-review { grid-template-columns: 1fr; }
+  table.data-table { display: block; width: 100%; overflow-x: auto; }
 }
 
 /* Georgia renders Vietnamese combining marks poorly; use the UI sans font for headings on the new pages. */

@@ -1,4 +1,10 @@
 import type { ReactNode } from 'react'
+import { SCORE_LABELS, scoreText } from './api'
+
+export function ClassScores({ scores }: { scores?: number[] | null }) {
+  return <span className="class-scores">{SCORE_LABELS.map((label, index) =>
+    <span key={label} className="class-score"><span>{label}</span><b>{scoreText(scores?.[index])}</b></span>)}</span>
+}
 
 export function Panel({ kicker, title, subtitle, right, children, id }: {
   kicker?: string; title: string; subtitle?: string; right?: ReactNode; children: ReactNode; id?: string

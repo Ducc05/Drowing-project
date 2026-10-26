@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { RefObject } from 'react'
-import { api, fmt, newKey, pct, post, request, useAction, when } from '../api'
+import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, when } from '../api'
 import type { JobSummary } from '../api'
-import { Banner, Matrix, Panel, Tag } from '../ui'
+import { Banner, ClassScores, Matrix, Panel, Tag } from '../ui'
 
-const LABELS = ['drowning', 'swimming', 'out_of_water'] as const
 type Label = (typeof LABELS)[number]
-const labelText: Record<Label, string> = { drowning: 'Đuối nước', swimming: 'Bình thường trong nước', out_of_water: 'Ngoài nước' }
+const labelText: Record<Label, string> = { drowning: 'drowning', swimming: 'swimming', out_of_water: 'out_of_water' }
 const labelColor: Record<string, string> = { drowning: '#d86a63', swimming: '#5aa6d8', out_of_water: '#8fb78f' }
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
@@ -15,6 +14,17 @@ type ModelRow = {
   id: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; temporal_trained: boolean; completion_kind: string
   metrics: { image_validation?: Metrics; temporal_validation?: Metrics; device?: string }; cached_locally: boolean; created_at: string
   checkpoint: { drive_url: string | null; archive_sha256: string; weights_sha256?: string | null; size_bytes: number; status: string } | null
+}
+type PresenceMark = {
+  id: string; start_ms: number; end_ms: number; people: number; expected_label: Label | null; note: string
+  detected_boxes: number; detected_people_max: number; frames_with_detection: number; expected_frames: number
+  detection_rate: number; predicted_label: Label | null
+}
+type PresenceSummary = {
+  intervals: number; with_people: number; empty: number; interval_recall_any_person: number | null
+  interval_recall_full_count: number | null; mean_frame_detection_rate: number | null
+  empty_intervals_with_detections: number; empty_false_alarm_rate: number | null
+  label_accuracy_when_detected: number | null; label_checked_intervals: number
 }
 type Mark = {
   id: string; reviewer: string; track_id: string; start_ms: number; end_ms: number; verdict: 'correct' | 'wrong'
@@ -29,10 +39,11 @@ type Evaluation = {
   training_metrics_note: string; test_runs: { videos: number; images: number; videos_with_review_marks: number }
   human_review: MarkSummary; decisions: Array<{ decision: string; reviewer: string; comment: string; at: string }>
 }
-type Detection = { track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string }
+type Detection = { track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number }
+type ImageDetection = { detection_id?: string; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number }
 type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video' }
-type MediaResult = { job_id: string; state: string; model_version_id: string; files: Record<string, string>; summary?: VideoSummary }
-type VideoJob = JobSummary & { mode?: string | null; model_version_id?: string | null; idempotency_key?: string; frame_stride?: number; progress?: { frame: number; total: number; processed: number; elapsed_s: number; eta_s: number | null } | null }
+type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; files: Record<string, string>; summary?: VideoSummary }
+type VideoJob = JobSummary & { mode?: 'image' | 'video' | string | null; model_version_id?: string | null; idempotency_key?: string; frame_stride?: number; progress?: { frame: number; total: number; processed: number; elapsed_s: number; eta_s: number | null } | null }
 type Segment = { label: Label; start: number; end: number; branch: string }
 
 function VideoOverlay({ video, detections, summary }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary }) {
@@ -71,7 +82,7 @@ function VideoOverlay({ video, detections, summary }: { video: RefObject<HTMLVid
             const [x1, y1, x2, y2] = box
             ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy)
             const classIndex = LABELS.indexOf(left.label as Label), score = left.class_scores && classIndex >= 0 ? left.class_scores[classIndex] : null
-            const caption = `${trackId.replace('trk-', '#')}  ${left.label ? labelText[left.label] : label}${score == null ? '' : `  ${(score * 100).toFixed(0)}%`}`
+            const caption = `${trackId.replace('trk-', '#')}  ${left.label ? labelText[left.label] : label}${score == null ? '' : `  ${scoreText(score)}`}`
             ctx.font = '14px system-ui'; const textWidth = ctx.measureText(caption).width, tx = x1 * sx, ty = Math.max(17, y1 * sy - 5)
             ctx.fillStyle = color; ctx.fillRect(tx, ty - 15, textWidth + 8, 19); ctx.fillStyle = '#101820'; ctx.fillText(caption, tx + 4, ty - 1)
           }
@@ -92,6 +103,41 @@ function MetricsBlock({ title, metrics }: { title: string; metrics?: Metrics }) 
     <p>Độ chính xác <b>{pct(metrics.accuracy)}</b> · Macro-F1 <b>{pct(metrics.macro_f1)}</b></p>
     <p className="muted">Recall: {LABELS.map((l) => `${labelText[l]} ${pct(metrics.per_class_recall?.[l])}`).join(' · ')}</p>
     {metrics.confusion_matrix && <Matrix labels={LABELS.map((l) => l)} rows={metrics.confusion_matrix} rowTitle="thật" colTitle="dự đoán" />}</div>
+}
+
+function ImageReview({ jobId }: { jobId: string }) {
+  const [result, setResult] = useState<MediaResult | null>(null)
+  const [detections, setDetections] = useState<ImageDetection[]>([])
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let alive = true
+    Promise.all([
+      request<MediaResult>(`/api/v1/jobs/${jobId}/results`),
+      request<{ detections: ImageDetection[] }>(`/api/v1/jobs/${jobId}/results/detections`),
+    ]).then(([media, rows]) => {
+      if (alive) { setResult(media); setDetections(rows.detections) }
+    }).catch((reason) => { if (alive) setError(String(reason)) })
+    return () => { alive = false }
+  }, [jobId])
+  return <div className="image-review">
+    {error && <Banner error={error} />}
+    {result?.files.annotated && <img className="image-review-preview" src={api(result.files.annotated)} alt="Ảnh kết quả với hộp và nhãn dự đoán" />}
+    <div><b>{fmt(detections.length)} đối tượng được phát hiện</b>
+      <p className="muted">Điểm ba nhãn nằm trên thang 0–1, chưa phải xác suất đã hiệu chuẩn. Điểm YOLO tìm người được ghi riêng.</p>
+      {detections.length > 0 && <ul className="image-detection-list">{detections.map((item, index) => {
+        const label = item.label
+        const scoreIndex = label ? LABELS.indexOf(label) : -1
+        const score = item.class_scores && scoreIndex >= 0 ? item.class_scores[scoreIndex] : null
+        const box = item.bbox_xyxy.map((value) => Math.round(value)).join(', ')
+        return <li key={item.detection_id ?? index}>
+          <b>{label ? labelText[label] : 'Chưa phân loại'}</b>{score != null && ` · điểm ${scoreText(score)}`}
+          {item.detector_confidence != null && ` · YOLO tìm người ${scoreText(item.detector_confidence)}`}
+          <span> · bbox [{box}] · {item.prediction_branch}</span>
+          <ClassScores scores={item.class_scores} />
+        </li>
+      })}</ul>}
+    </div>
+  </div>
 }
 
 function buildSegments(detections: Detection[]): Record<string, Segment[]> {
@@ -117,6 +163,7 @@ function buildSegments(detections: Detection[]): Record<string, Segment[]> {
 
 function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: string; onChanged: () => void }) {
   const video = useRef<HTMLVideoElement>(null)
+  const [playbackMs, setPlaybackMs] = useState(0)
   const [detections, setDetections] = useState<Detection[]>([])
   const [summary, setSummary] = useState<VideoSummary>()
   const [marks, setMarks] = useState<Mark[]>([])
@@ -126,17 +173,47 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const [verdict, setVerdict] = useState<'correct' | 'wrong'>('correct')
   const [expected, setExpected] = useState<Label | ''>('')
   const [note, setNote] = useState('')
+  const [pStart, setPStart] = useState<number | null>(null)
+  const [pEnd, setPEnd] = useState<number | null>(null)
+  const [pPeople, setPPeople] = useState(1)
+  const [pLabel, setPLabel] = useState<Label | ''>('')
+  const [pNote, setPNote] = useState('')
+  const [pMarks, setPMarks] = useState<PresenceMark[]>([])
+  const [pSummary, setPSummary] = useState<PresenceSummary | null>(null)
   const action = useAction()
   const setActionError = action.setError
 
+  const loadPresence = useCallback(async () => {
+    const r = await request<{ marks: PresenceMark[]; summary: PresenceSummary }>(`/api/v1/jobs/${jobId}/presence-marks`)
+    setPMarks(r.marks); setPSummary(r.summary)
+  }, [jobId])
   const loadMarks = useCallback(async () => { setMarks((await request<{ marks: Mark[] }>(`/api/v1/jobs/${jobId}/review-marks`)).marks) }, [jobId])
   useEffect(() => {
     request<{ detections: Detection[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => setDetections(r.detections)).catch((e) => setActionError(String(e)))
     request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setActionError(String(e)))
     void loadMarks().catch((e) => setActionError(String(e)))
-  }, [jobId, loadMarks, setActionError])
+    void loadPresence().catch((e) => setActionError(String(e)))
+  }, [jobId, loadMarks, loadPresence, setActionError])
 
   const segments = useMemo(() => buildSegments(detections), [detections])
+  const samplesByTrack = useMemo(() => {
+    const groups: Record<string, Detection[]> = {}
+    for (const item of detections) (groups[item.track_id] ??= []).push(item)
+    for (const rows of Object.values(groups)) rows.sort((a, b) => a.timestamp_ms - b.timestamp_ms)
+    return groups
+  }, [detections])
+  const scoreRows = useMemo(() => {
+    const step = 1000 * (summary?.frame_stride ?? 3) / (summary?.fps_metadata || 30)
+    const gap = summary?.max_gap_ms ?? 1500
+    const rows: Detection[] = []
+    for (const items of Object.values(samplesByTrack)) {
+      let low = 0, high = items.length
+      while (low < high) { const middle = (low + high) >>> 1; if (items[middle].timestamp_ms <= playbackMs) low = middle + 1; else high = middle }
+      const left = items[low - 1], right = items[low]
+      if (left && ((right && right.timestamp_ms - left.timestamp_ms <= gap) || playbackMs - left.timestamp_ms <= step)) rows.push(left)
+    }
+    return rows
+  }, [samplesByTrack, playbackMs, summary])
   const tracks = Object.keys(segments).sort()
   const current = () => Math.round((video.current?.currentTime ?? 0) * 1000)
   const duration = Math.max(1, ...Object.values(segments).flat().map((s) => s.end))
@@ -149,6 +226,14 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
     return 'Đã ghi đánh dấu.'
   })
   const remove = (id: string) => action.run(async () => { await request(`/api/v1/jobs/${jobId}/review-marks/${id}`, { method: 'DELETE' }); await loadMarks(); onChanged() })
+  const savePresence = () => action.run(async () => {
+    await post(`/api/v1/jobs/${jobId}/presence-marks`, {
+      reviewer, start_ms: pStart, end_ms: pEnd, people: pPeople, expected_label: pPeople > 0 ? (pLabel || null) : null, note: pNote })
+    setPNote(''); setPStart(null); setPEnd(null)
+    await loadPresence(); onChanged()
+    return 'Đã ghi đoạn có người.'
+  })
+  const removePresence = (id: string) => action.run(async () => { await request(`/api/v1/jobs/${jobId}/presence-marks/${id}`, { method: 'DELETE' }); await loadPresence(); onChanged() })
   const pick = (trackId: string, segment: Segment) => {
     setTrack(trackId); setStart(segment.start); setEnd(segment.end)
     if (video.current) video.current.currentTime = segment.start / 1000
@@ -157,7 +242,10 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   return <div className="review-area">
     <Banner error={action.error} notice={action.notice} />
     <div className="review-layout">
-      <div className="video-shell"><video ref={video} controls src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
+      <div className="video-shell"><video ref={video} controls
+        onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
+        onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
+        src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
         <VideoOverlay video={video} detections={detections} summary={summary} /></div>
       <div className="timeline-box">
         <p className="muted">Mỗi dòng là một người do tracker gán ID tạm (không phải danh tính đã xác minh). Màu là nhãn model dự đoán; bấm vào một đoạn để chọn khoảng thời gian cần đánh dấu.</p>
@@ -171,6 +259,12 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
         </div>)}
         <div className="legend">{LABELS.map((l) => <span key={l}><i style={{ background: labelColor[l] }} />{labelText[l]}</span>)}<span><i className="hatch" />dự đoán ảnh đơn (khởi động, chưa đủ chuỗi hoặc chưa đủ khung của người đó)</span></div>
       </div>
+    </div>
+    <div className="score-panel">
+      <p className="muted">Điểm ba nhãn tại khung đã xử lý gần nhất, thời điểm {(playbackMs / 1000).toFixed(2)}s. Thang 0–1, chưa phải xác suất đã hiệu chuẩn.</p>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>YOLO tìm người</th><th>Điểm ba nhãn</th></tr></thead>
+        <tbody>{scoreRows.map((row) => <tr key={row.track_id}><td>{row.track_id}</td><td>{row.label ?? '—'}</td><td>{scoreText(row.detector_confidence)}</td><td><ClassScores scores={row.class_scores} /></td></tr>)}
+          {scoreRows.length === 0 && <tr><td colSpan={4} className="muted">Không có detection tại thời điểm này.</td></tr>}</tbody></table></div>
     </div>
     <div className="mark-form">
       <h4>Đánh dấu đoạn video</h4>
@@ -189,6 +283,31 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
       <tbody>{marks.map((mark) => <tr key={mark.id}><td>{mark.track_id}</td><td>{(mark.start_ms / 1000).toFixed(2)}–{(mark.end_ms / 1000).toFixed(2)}s ({mark.frames} khung)</td>
         <td>{labelText[mark.predicted_label]}</td><td>{mark.verdict === 'correct' ? <Tag tone="ok">đúng</Tag> : <Tag tone="bad">sai → {mark.expected_label ? labelText[mark.expected_label] : 'chưa rõ'}</Tag>}</td>
         <td>{mark.note}</td><td><button className="review-button" onClick={() => void remove(mark.id)}>Xóa</button></td></tr>)}</tbody></table>}
+    <div className="mark-form">
+      <h4>Đánh dấu có người (kể cả người model không thấy)</h4>
+      <p className="muted">Để đo bỏ sót và báo nhầm: ghi "trong đoạn này có N người", không phụ thuộc kết quả model. Chọn 0 người cho đoạn trống. Chỉ cần ghi khoảng thời gian, không cần vẽ khung.</p>
+      <div className="mark-row">
+        <div className="time-pick"><button className="secondary-button big" onClick={() => setPStart(current())}>Đặt đầu</button><b>{pStart == null ? '—' : `${(pStart / 1000).toFixed(2)}s`}</b></div>
+        <div className="time-pick"><button className="secondary-button big" onClick={() => setPEnd(current())}>Đặt cuối</button><b>{pEnd == null ? '—' : `${(pEnd / 1000).toFixed(2)}s`}</b></div>
+        <label className="field">Số người thật<input type="number" min={0} max={50} value={pPeople} onChange={(e) => setPPeople(Math.max(0, Math.min(50, Number(e.target.value) || 0)))} /></label>
+        {pPeople > 0 && <label className="field">Trạng thái đúng<select value={pLabel} onChange={(e) => setPLabel(e.target.value as Label | '')}><option value="">(chưa rõ)</option>{LABELS.map((l) => <option key={l} value={l}>{labelText[l]}</option>)}</select></label>}
+        <label className="field grow">Ghi chú<input value={pNote} onChange={(e) => setPNote(e.target.value)} placeholder="Ví dụ: người ở xa, chỉ thấy cánh tay" /></label>
+        <button className="primary-button" disabled={!reviewer.trim() || pStart == null || pEnd == null || pEnd <= pStart || action.busy} onClick={() => void savePresence()}>Ghi đoạn có người</button>
+      </div>
+    </div>
+    {pSummary && pSummary.intervals > 0 && <div className="callout info">
+      <b>Phát hiện người:</b> {pSummary.with_people} đoạn có người, {pSummary.empty} đoạn trống. Model thấy ít nhất 1 người ở <b>{pct(pSummary.interval_recall_any_person)}</b> số đoạn có người,
+      thấy đủ số người ở <b>{pct(pSummary.interval_recall_full_count)}</b>, trung bình có phát hiện ở <b>{pct(pSummary.mean_frame_detection_rate)}</b> số khung.
+      Đoạn trống mà model vẫn báo có người: <b>{pSummary.empty_intervals_with_detections}/{pSummary.empty}</b>.
+      {pSummary.label_checked_intervals > 0 && <> Nhãn đúng khi có phát hiện: <b>{pct(pSummary.label_accuracy_when_detected)}</b> ({pSummary.label_checked_intervals} đoạn).</>}
+      {' '}Chỉ tính các đoạn bạn đã ghi, không phải kết quả đo trên video chưa xem.</div>}
+    {pMarks.length > 0 && <table className="data-table"><thead><tr><th>Đoạn</th><th>Có người thật</th><th>Model thấy</th><th>Khung có phát hiện</th><th>Nhãn đúng / dự đoán</th><th>Ghi chú</th><th /></tr></thead>
+      <tbody>{pMarks.map((m) => <tr key={m.id}><td>{(m.start_ms / 1000).toFixed(2)}–{(m.end_ms / 1000).toFixed(2)}s</td>
+        <td>{m.people}</td>
+        <td>{m.people > 0 && m.detected_people_max === 0 ? <Tag tone="bad">bỏ sót</Tag> : m.people === 0 && m.detected_boxes > 0 ? <Tag tone="bad">báo nhầm {m.detected_boxes} hộp</Tag> : <Tag tone="ok">{m.detected_people_max} người</Tag>}</td>
+        <td>{m.frames_with_detection}/{m.expected_frames} ({pct(m.detection_rate)})</td>
+        <td>{m.expected_label ? labelText[m.expected_label] : '—'} / {m.predicted_label ? labelText[m.predicted_label] : '—'}</td>
+        <td>{m.note}</td><td><button className="review-button" onClick={() => void removePresence(m.id)}>Xóa</button></td></tr>)}</tbody></table>}
   </div>
 }
 
@@ -198,9 +317,12 @@ export default function EvaluationPage() {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [videoJobs, setVideoJobs] = useState<VideoJob[]>([])
   const [jobId, setJobId] = useState('')
+  const [jobModality, setJobModality] = useState<'image' | 'video'>('video')
   const [file, setFile] = useState<File | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  const mediaInput = useRef<HTMLInputElement>(null)
   const [key, setKey] = useState<string | null>(null)
-  const [activeVideoJob, setActiveVideoJob] = useState<VideoJob | null>(null)
+  const [activeMediaJob, setActiveMediaJob] = useState<VideoJob | null>(null)
   const [stopPending, setStopPending] = useState(false)
   const [reviewer, setReviewer] = useState(() => localStorage.getItem('reviewer') ?? '')
   const action = useAction()
@@ -209,7 +331,7 @@ export default function EvaluationPage() {
   const loadModels = useCallback(async () => {
     const [list, jobs] = await Promise.all([request<{ models: ModelRow[] }>('/api/v1/models'), request<{ jobs: VideoJob[] }>('/api/v1/jobs')])
     setModels(list.models)
-    setVideoJobs(jobs.jobs.filter((job) => job.job_type === 'inference' && job.mode === 'video' && ['completed', 'sync_pending'].includes(job.state)))
+    setVideoJobs(jobs.jobs.filter((job) => job.job_type === 'inference' && ['image', 'video'].includes(job.mode ?? '') && ['completed', 'sync_pending'].includes(job.state)))
     setSelected((current) => current || list.models[0]?.id || '')
   }, [])
   const loadEvaluation = useCallback(async () => {
@@ -220,44 +342,59 @@ export default function EvaluationPage() {
   useEffect(() => { void loadEvaluation().catch((e) => setActionError(String(e))) }, [loadEvaluation, setActionError])
   useEffect(() => { localStorage.setItem('reviewer', reviewer) }, [reviewer])
   useEffect(() => {
-    if (!key) return
+    if (!key || jobModality !== 'video') return
     let alive = true
     const poll = async () => {
       try {
         const rows = (await request<{ jobs: VideoJob[] }>('/api/v1/jobs')).jobs
         const match = rows.find((job) => job.idempotency_key === key)
-        if (alive && match) setActiveVideoJob(match)
+        if (alive && match && match.mode === 'video') setActiveMediaJob(match)
       } catch { /* the upload request reports the primary failure */ }
     }
     void poll()
     const timer = window.setInterval(() => void poll(), 2000)
     return () => { alive = false; window.clearInterval(timer) }
-  }, [key])
+  }, [key, jobModality])
 
   const model = models.find((m) => m.id === selected)
   const modelJobs = videoJobs.filter((job) => job.model_version_id === selected)
 
   const sync = () => action.run(async () => { await post(`/api/v1/models/${selected}/sync`); await loadModels(); return 'Đã tải và kiểm tra model về máy (checksum và danh tính khớp registry).' })
-  const runVideo = () => action.run(async () => {
+  const acceptFile = (incoming: File | null) => {
+    if (!incoming) return
+    const ext = incoming.name.split('.').pop()?.toLowerCase() ?? ''
+    const kind = incoming.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'bmp'].includes(ext)
+      ? 'image' : incoming.type.startsWith('video/') || ['mp4', 'avi', 'mov', 'mkv', 'webm'].includes(ext) ? 'video' : null
+    if (!kind) { setFile(null); setKey(null); action.setError('Chọn ảnh JPG/PNG/WebP/BMP hoặc video MP4/AVI/MOV/MKV/WebM.'); return }
+    setFile(incoming); setJobModality(kind); setJobId(''); setKey(null); setActiveMediaJob(null); action.setError('')
+  }
+  const runMedia = () => action.run(async () => {
     if (!file) return
-    const k = key ?? newKey('eval-video')
+    const k = key ?? newKey(`eval-${jobModality}`)
     setKey(k)
     const form = new FormData()
     form.append('file', file)
     let result: MediaResult
     try {
-      result = await request<MediaResult>(`/api/v1/test/video?model_version_id=${selected}&frame_stride=3`, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
+      const endpoint = jobModality === 'video'
+        ? `/api/v1/test/video?model_version_id=${selected}&frame_stride=3`
+        : `/api/v1/test/image?model_version_id=${selected}`
+      result = await request<MediaResult>(endpoint, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
     } catch (error) {
       const detail = error && typeof error === 'object' && 'detail' in error ? (error as { detail?: { state?: string } }).detail : undefined
       if (detail?.state === 'cancelled') {
-        setActiveVideoJob((job) => job ? { ...job, state: 'cancelled' } : job)
+        setActiveMediaJob((job) => job ? { ...job, state: 'cancelled' } : job)
+        setKey(null)
         return 'Đã dừng xử lý video; ô compute đã được nhả.'
       }
       throw error
-    } finally { setKey(null) }
-    setFile(null); setJobId(result.job_id); setActiveVideoJob(null)
+    }
+    setKey(null)
+    setFile(null); setJobId(result.job_id); setJobModality(result.modality); setActiveMediaJob(null)
     await loadModels(); await loadEvaluation()
-    return `Xử lý xong ${fmt(result.summary?.frame_count)} khung hình. Hãy xem video và đánh dấu đoạn đúng/sai.`
+    return result.modality === 'video'
+      ? `Xử lý xong ${fmt(result.summary?.frame_count)} khung hình. Hãy xem video và đánh dấu đoạn đúng/sai.`
+      : `Kiểm tra ảnh xong, phát hiện ${fmt(result.summary?.detection_count)} đối tượng.`
   })
   const review = (decision: 'approve' | 'reject') => action.run(async () => {
     await post(`/api/v1/models/${selected}/review`, { decision, reviewer_id: reviewer, comment: '' })
@@ -265,18 +402,18 @@ export default function EvaluationPage() {
     return decision === 'approve' ? 'Đã duyệt model làm model chính.' : 'Đã từ chối model; phiên bản vẫn được lưu.'
   })
   const stopVideo = async () => {
-    if (!activeVideoJob) return
+    if (!activeMediaJob) return
     setStopPending(true)
     try {
-      const result = await post<{ message: string }>(`/api/v1/test/jobs/${activeVideoJob.id}/stop`)
+      const result = await post<{ message: string }>(`/api/v1/test/jobs/${activeMediaJob.id}/stop`)
       action.setNotice(result.message)
     } catch (error) { action.setError(error instanceof Error ? error.message : String(error)) }
     finally { setStopPending(false) }
   }
 
   return <div className="page-stack">
-    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> ĐÁNH GIÁ</div><h1>Xem model làm việc trên video thật</h1>
-      <p className="subtitle">Model ứng viên không tự trở thành model chính. Bạn chạy thử trên video của mình, đánh dấu đoạn đúng/sai rồi mới quyết định duyệt hoặc từ chối.</p></header>
+    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> ĐÁNH GIÁ</div><h1>Xem model trên ảnh và video thật</h1>
+      <p className="subtitle">Model ứng viên không tự trở thành model chính. Thử trên ảnh hoặc video; với video, bạn có thể đánh dấu các đoạn đúng/sai trước khi quyết định duyệt.</p></header>
     <Banner error={action.error} notice={action.notice} />
     <Panel kicker="MODEL" title="Phiên bản model" subtitle="Số liệu do Kaggle báo trên tập validation; không phải kết quả trên video của bạn."
       right={<label className="field inline">Tên người duyệt<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Tên của bạn" /></label>}>
@@ -287,6 +424,7 @@ export default function EvaluationPage() {
           <div className="stat-row">
             <div><b>{model.status}</b><span>trạng thái · tạo {when(model.created_at)}</span></div>
             <div><b>{model.cached_locally ? 'có' : 'chưa'}</b><span>đã tải về máy này</span></div>
+            <div><b>{fmt(evaluation?.test_runs.images)}</b><span>ảnh đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.test_runs.videos)}</b><span>video đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.human_review.segments)}</b><span>đoạn bạn đã đánh dấu</span></div>
           </div>
@@ -300,26 +438,40 @@ export default function EvaluationPage() {
           <p className="muted">{evaluation?.training_metrics_note}</p>
           <div className="toolbar">
             <button className="secondary-button big" disabled={action.busy || model.cached_locally} onClick={() => void sync()}>{model.cached_locally ? 'Đã có trên máy' : 'Tải model về máy để thử'}</button>
-            <label className="field inline">Video thử (tối đa 512 MiB)<input type="file" accept=".mp4,.avi,.mov,.mkv,.webm" onChange={(e: ChangeEvent<HTMLInputElement>) => { setFile(e.target.files?.[0] ?? null); setKey(null) }} /></label>
-            <button className="primary-button" disabled={!model.cached_locally || !file || action.busy} onClick={() => void runVideo()}>{action.busy ? 'Đang xử lý…' : 'Chạy thử với model này'}</button>
+            <div className={`media-dropzone ${dragOver ? 'drag-over' : ''} ${file ? 'has-file' : ''}`}
+              role="group" aria-label="Chọn ảnh hoặc video để chạy thử"
+              onDragOver={(event) => { event.preventDefault(); setDragOver(true) }}
+              onDragLeave={(event) => { const target = event.relatedTarget; if (!(target instanceof Node) || !event.currentTarget.contains(target)) setDragOver(false) }}
+              onDrop={(event) => { event.preventDefault(); setDragOver(false); acceptFile(event.dataTransfer.files[0] ?? null) }}>
+              <input ref={mediaInput} className="visually-hidden-input" type="file" accept=".jpg,.jpeg,.png,.webp,.bmp,.mp4,.avi,.mov,.mkv,.webm"
+                disabled={action.busy} onChange={(event: ChangeEvent<HTMLInputElement>) => { acceptFile(event.target.files?.[0] ?? null); event.currentTarget.value = '' }} />
+              <div className="media-drop-copy"><b>{file ? file.name : 'Kéo ảnh hoặc video vào đây'}</b>
+                <span>{file ? (jobModality === 'image' ? 'Ảnh' : 'Video') : 'JPG, PNG, WebP, BMP, MP4, AVI, MOV, MKV hoặc WebM · tối đa 512 MiB'}</span></div>
+              <button type="button" className="secondary-button big" disabled={action.busy} onClick={() => mediaInput.current?.click()}>
+                {file ? 'Chọn tệp khác' : 'Chọn tệp'}
+              </button>
+            </div>
+            <button className="primary-button" disabled={!model.cached_locally || !file || action.busy} onClick={() => void runMedia()}>
+              {action.busy ? 'Đang xử lý…' : `Chạy thử ${file ? (jobModality === 'image' ? 'ảnh' : 'video') : 'với model này'}`}</button>
           </div>
-          {key && <div className="callout info progress-box">
-            <div><b>{activeVideoJob?.state === 'queued' ? 'Đang chờ ô compute' : 'Đang xử lý video'}</b>
-              {activeVideoJob?.progress && <> · detector đã xử lý {fmt(activeVideoJob.progress.processed)}/{fmt(Math.ceil(activeVideoJob.progress.total / (activeVideoJob.frame_stride || 3)))} khung
-                ({fmt(activeVideoJob.progress.frame)}/{fmt(activeVideoJob.progress.total)} khung video)
-                {activeVideoJob.progress.eta_s != null && <> · còn khoảng {Math.ceil(activeVideoJob.progress.eta_s / 60)} phút</>}</>}</div>
-            <progress max={activeVideoJob?.progress?.total || 1} value={activeVideoJob?.progress?.frame || 0} />
-            {activeVideoJob && <button className="secondary-button big stop" disabled={stopPending || activeVideoJob.state === 'cancellation_requested'} onClick={() => void stopVideo()}>
-              {stopPending || activeVideoJob.state === 'cancellation_requested' ? 'Đang dừng…' : 'Dừng'}</button>}
+          {key && jobModality === 'image' && <div className="callout info">Đang kiểm tra ảnh…</div>}
+          {key && jobModality === 'video' && <div className="callout info progress-box">
+            <div><b>{activeMediaJob?.state === 'queued' ? 'Đang chờ ô compute' : 'Đang xử lý video'}</b>
+              {activeMediaJob?.progress && <> · detector đã xử lý {fmt(activeMediaJob.progress.processed)}/{fmt(Math.ceil(activeMediaJob.progress.total / (activeMediaJob.frame_stride || 3)))} khung
+                ({fmt(activeMediaJob.progress.frame)}/{fmt(activeMediaJob.progress.total)} khung video)
+                {activeMediaJob.progress.eta_s != null && <> · còn khoảng {Math.ceil(activeMediaJob.progress.eta_s / 60)} phút</>}</>}</div>
+            <progress max={activeMediaJob?.progress?.total || 1} value={activeMediaJob?.progress?.frame || 0} />
+            {activeMediaJob && <button className="secondary-button big stop" disabled={stopPending || activeMediaJob.state === 'cancellation_requested'} onClick={() => void stopVideo()}>
+              {stopPending || activeMediaJob.state === 'cancellation_requested' ? 'Đang dừng…' : 'Dừng'}</button>}
           </div>}
-          {activeVideoJob?.state === 'cancelled' && <p className="muted">Đã dừng xử lý video; ô compute đã được nhả.</p>}
+          {activeMediaJob?.state === 'cancelled' && <p className="muted">Đã dừng xử lý video; ô compute đã được nhả.</p>}
           {!model.cached_locally && <p className="muted">Cần tải model về máy trước, và cần PERSON_DETECTOR_WEIGHTS trong .env để chạy thử.</p>}
-          {modelJobs.length > 0 && <div className="reopen">Video đã chạy: {modelJobs.map((job) => <button key={job.id} className={`secondary-button big ${job.id === jobId ? 'on' : ''}`} onClick={() => setJobId(job.id)}>{job.id.slice(0, 8)} · {when(job.created_at)}</button>)}</div>}
+          {modelJobs.length > 0 && <div className="reopen">Ảnh / video đã chạy: {modelJobs.map((job) => <button key={job.id} className={`secondary-button big ${job.id === jobId ? 'on' : ''}`} onClick={() => { setJobId(job.id); setJobModality(job.mode === 'image' ? 'image' : 'video') }}>{job.mode === 'image' ? 'Ảnh' : 'Video'} · {job.id.slice(0, 8)} · {when(job.created_at)}</button>)}</div>}
         </>}
       </>}
     </Panel>
-    {jobId && <Panel kicker="XEM VÀ ĐÁNH DẤU" title={`Video ${jobId.slice(0, 8)}`} subtitle="Đánh dấu là nhận định của bạn về những đoạn bạn chọn; không phải benchmark.">
-      <VideoReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} />
+    {jobId && <Panel kicker={jobModality === 'image' ? 'KẾT QUẢ ẢNH' : 'XEM VÀ ĐÁNH DẤU'} title={`${jobModality === 'image' ? 'Ảnh' : 'Video'} ${jobId.slice(0, 8)}`} subtitle={jobModality === 'image' ? 'Ảnh đã gắn khung và nhãn dự đoán.' : 'Đánh dấu là nhận định của bạn về những đoạn video; không phải benchmark.'}>
+      {jobModality === 'image' ? <ImageReview key={jobId} jobId={jobId} /> : <VideoReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} />}
     </Panel>}
     {evaluation && evaluation.human_review.segments > 0 && <Panel kicker="TỔNG HỢP" title="Nhận định của bạn về model này" subtitle={evaluation.human_review.caveat}>
       <div className="stat-row">

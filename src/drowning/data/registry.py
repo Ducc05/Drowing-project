@@ -109,6 +109,13 @@ def inspect_source(source: dict[str, Any], environ: dict[str, str] | None = None
 def read_class_names(source: dict[str, Any], root: Path) -> list[tuple[int | str, str]]:
     """Read declared class names from supported YOLO or COCO metadata files."""
     path_config = source.get("paths", {})
+    declared = (source.get("source_labels") or {}).get("class_names")
+    if declared is not None and not path_config.get("class_list"):
+        # For datasets that were uploaded without data.yaml: the descriptor states which index is which name.
+        items = list(declared.items()) if isinstance(declared, dict) else list(enumerate(declared)) if isinstance(declared, list) else []
+        if not items or any(name is None or not str(name).strip() for _, name in items):
+            raise SourceConfigError("source_labels.class_names must be a nonempty list or an id-to-name mapping")
+        return [(class_id, str(name)) for class_id, name in items]
     spec = path_config.get("class_list")
     if not isinstance(spec, str) or ":" not in spec:
         raise SourceConfigError("paths.class_list must be a relative_file:field reference")

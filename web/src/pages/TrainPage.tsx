@@ -8,12 +8,13 @@ type Mode = 'prepare_only' | 'remote_smoke' | 'train_candidate'
 type Branch = 'temporal' | 'image_only'
 type RunView = { job_id: string; state: string; created_at: string; summary: Record<string, unknown> | null } | null
 type Preflight = {
+  capabilities?: { continue_from_approved: boolean; source_selection: boolean }
   environment: Record<string, boolean | number | string>
   sources: Array<{ source_id: string; mapping_approved: boolean; groups_verified: boolean; modality: string }>
   stale_sources: string[]
   latest_prepare: RunView
   latest_smoke: RunView
-  approved_model: { id: string; display_version: string } | null
+  approved_model: { id: string; display_version: string; model_kind: 'temporal' | 'image_tracked' | null; cached_locally: boolean } | null
   compute_slot_held_by: { job_id: string; job_type: string; mode: string | null; state: string } | null
   queued_kaggle_jobs: number
   modes: Record<Mode, { allowed: boolean; blocked_by: string[]; branch_blocked_by?: Record<Branch, string[]> }>
@@ -58,6 +59,8 @@ export default function TrainPage() {
   const [newVersion, setNewVersion] = useState(false)
   const [reason, setReason] = useState('')
   const [pretrained, setPretrained] = useState(false)
+  const [continueFromApproved, setContinueFromApproved] = useState(false)
+  const [selectedSources, setSelectedSources] = useState<string[] | null>(null)
   const [imageEpochs, setImageEpochs] = useState(5)
   const [videoEpochs, setVideoEpochs] = useState(3)
   const [keys, setKeys] = useState<Partial<Record<Mode, string>>>({})
@@ -92,7 +95,10 @@ export default function TrainPage() {
     const key = keys[mode] ?? newKey(mode)
     setKeys((k) => ({ ...k, [mode]: key }))
     const result = await post<{ status: string; message?: string }>('/api/v1/train/submit', {
-      mode, new_version: newVersion, reason, idempotency_key: key, pretrained, image_epochs: imageEpochs, video_epochs: videoEpochs, branch: 'image_only' })
+      mode, new_version: newVersion, reason, idempotency_key: key, pretrained: continueFromApproved ? false : pretrained,
+      continue_from_approved: mode === 'train_candidate' && continueFromApproved,
+      source_ids: mode === 'train_candidate' ? (selectedSources ?? pre?.sources.map((s) => s.source_id)) : null,
+      image_epochs: imageEpochs, video_epochs: videoEpochs, branch: 'image_only' })
     setKeys((k) => ({ ...k, [mode]: undefined }))
     if (result.status === 'queued') { try { await post('/api/v1/supervisor/tick') } catch { /* background loop will pick it up */ } }
     await load()
@@ -127,20 +133,42 @@ export default function TrainPage() {
       const last = step.mode === 'prepare_only' ? pre?.latest_prepare : step.mode === 'remote_smoke' ? pre?.latest_smoke : null
       const blockers = [...(mode?.blocked_by ?? []).filter((b) => !(step.mode === 'train_candidate' && b.startsWith('an approved model already exists'))),
         ...(step.mode === 'train_candidate' ? (mode?.branch_blocked_by?.image_only ?? []) : [])]
-      const candidateNeedsInput = step.mode === 'train_candidate' && (!newVersion || reason.trim().length < 10)
+      const selected = selectedSources ?? pre?.sources.map((s) => s.source_id) ?? []
+      const supportsTrainingOptions = Boolean(pre?.capabilities?.continue_from_approved && pre.capabilities.source_selection)
+      const continuationReady = Boolean(pre?.approved_model?.cached_locally && pre.approved_model.model_kind === 'image_tracked')
+      const candidateNeedsInput = step.mode === 'train_candidate' && (!newVersion || reason.trim().length < 10
+        || !supportsTrainingOptions || selected.length === 0 || (continueFromApproved && !continuationReady))
       return <Panel key={step.mode} kicker="BƯỚC" title={step.title} subtitle={step.lead}
         right={last ? <Tag tone={stateTone(last.state)}>lần gần nhất: {stateText[last.state] ?? last.state}</Tag> : <Tag tone="warn">chưa chạy</Tag>}>
         {blockers.length > 0 ? <ul className="findings">{blockers.map((b) => <li className="warn" key={b}>{b}</li>)}</ul>
           : <div className="callout ok">Đủ điều kiện chạy bước này.</div>}
         {step.mode === 'train_candidate' && <>
+          {pre && !supportsTrainingOptions && <div className="callout warn">Backend chưa tải phiên bản hỗ trợ train tiếp và chọn dataset. Chờ job đang chạy hoàn tất rồi khởi động lại backend.</div>}
           {pre?.approved_model && <div className="callout info">Đã có model được duyệt ({pre.approved_model.display_version}). Hệ thống sẽ <b>không</b> train lại trừ khi bạn yêu cầu phiên bản mới.</div>}
           <label className="confirm"><input type="checkbox" checked={newVersion} onChange={(e) => setNewVersion(e.target.checked)} />Tôi yêu cầu train một <b>phiên bản mới</b> một cách có chủ đích.</label>
           <label className="field">Lý do (tối thiểu 10 ký tự)<textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
+          <label className="field">Khởi tạo lượt train<select value={continueFromApproved ? 'continue' : 'fresh'} onChange={(e) => { setContinueFromApproved(e.target.value === 'continue'); setSelectedSources(e.target.value === 'continue' ? [] : null); setKeys((k) => ({ ...k, train_candidate: undefined })) }}>
+            <option value="fresh">Train model mới</option>
+            <option value="continue" disabled={!pre?.approved_model}>Train tiếp model chính{pre?.approved_model ? ` — ${pre.approved_model.display_version}` : ' (chưa có model đã duyệt)'}</option>
+          </select></label>
+          {continueFromApproved && <div className={`callout ${continuationReady ? 'info' : 'warn'}`}>
+            Dùng trọng số từ <b>{pre?.approved_model?.display_version}</b>, train tiếp trên các dataset chọn bên dưới và tạo một model ứng viên mới. Epoch và optimizer bắt đầu mới.
+            {' '}Checkpoint được gửi lên Kaggle dưới dạng dataset riêng tư, gắn riêng với lượt train này.
+            {!pre?.approved_model?.cached_locally && <> Cần <a href="#overview">đồng bộ model chính về máy</a> trước.</>}
+            {pre?.approved_model && pre.approved_model.model_kind !== 'image_tracked' && <> Model gốc không cùng loại với chế độ ảnh của trang Train.</>}
+          </div>}
+          <fieldset><legend>Dataset dùng cho lượt train này</legend>
+            {pre?.sources.map((source) => <label className="confirm" key={source.source_id}><input type="checkbox" checked={selected.includes(source.source_id)} onChange={(e) => {
+              setSelectedSources(e.target.checked ? [...selected, source.source_id] : selected.filter((id) => id !== source.source_id))
+              setKeys((k) => ({ ...k, train_candidate: undefined }))
+            }} />{source.source_id} · {source.modality}</label>)}
+            {selected.length === 0 && <p className="muted">Chọn ít nhất một dataset đã đăng ký.</p>}
+          </fieldset>
           <div className="callout info"><b>Chế độ ảnh.</b> Nếu có nguồn video có nhãn, video được cắt thành khung ảnh (mỗi người khoảng 0,5 giây một khung, luôn giữ khung đổi trạng thái, tối đa 300 khung mỗi video) và <b>train trước</b>; sau đó mới train tiếp bằng ảnh rời. Không có video thì chỉ train ảnh. Khi chạy trên video, tracker gán ID từng người và điểm số được làm mượt theo ID đó. Model <b>không hiểu chuyển động</b>; tham số làm mượt chỉ là giá trị khởi điểm chưa chỉnh trên video có nhãn.</div>
           <div className="toolbar wrap">
             <label className="field">Epoch khung video (train trước)<input type="number" min={1} max={50} value={videoEpochs} onChange={(e) => setVideoEpochs(Number(e.target.value))} /></label>
             <label className="field">Epoch ảnh (train sau)<input type="number" min={1} max={50} value={imageEpochs} onChange={(e) => setImageEpochs(Number(e.target.value))} /></label>
-            <label className="confirm"><input type="checkbox" checked={pretrained} onChange={(e) => setPretrained(e.target.checked)} />Khởi tạo encoder bằng trọng số ImageNet (Kaggle tải qua internet; ghi vào hồ sơ model)</label>
+            <label className="confirm"><input type="checkbox" disabled={continueFromApproved} checked={!continueFromApproved && pretrained} onChange={(e) => setPretrained(e.target.checked)} />Khởi tạo encoder bằng trọng số ImageNet (Kaggle tải qua internet; ghi vào hồ sơ model)</label>
           </div>
         </>}
         <div className="toolbar">

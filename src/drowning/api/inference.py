@@ -90,6 +90,8 @@ def load_approved_pipeline(session: Session, settings: Settings, *,
 
 
 def run_image_test(pipeline: Any, source: Path, output_dir: Path) -> dict[str, Any]:
+    from drowning.inference.annotations import class_scores_text
+
     output_dir.mkdir(parents=True, exist_ok=False)
     with Image.open(source) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
@@ -99,8 +101,18 @@ def run_image_test(pipeline: Any, source: Path, output_dir: Path) -> dict[str, A
     for item in result["detections"]:
         x1, y1, x2, y2 = item["bbox_xyxy"]
         draw.rectangle((x1, y1, x2, y2), outline=(52, 163, 135), width=3)
-        draw.text((x1, max(0, y1 - 16)), f"{item.get('label') or 'unknown'} | {item['prediction_branch']}",
-                  fill=(17, 35, 42), stroke_width=1, stroke_fill=(255, 255, 255))
+        caption = f"{item.get('label') or 'unknown'} | {item['prediction_branch']}"
+        if item.get("detector_confidence") is not None:
+            caption += f" | YOLO={item['detector_confidence']:.3f}"
+        scores = class_scores_text(item.get("class_scores"))
+        if scores:
+            caption += "\n" + scores
+        bounds = draw.multiline_textbbox((0, 0), caption, spacing=2)
+        width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
+        tx = max(0, min(x1, image.width - width - 6))
+        ty = max(0, y1 - height - 6)
+        draw.rectangle((tx, ty, min(image.width, tx + width + 6), ty + height + 6), fill=(255, 255, 255))
+        draw.multiline_text((tx + 3, ty + 2), caption, spacing=2, fill=(17, 35, 42))
     annotated_path = output_dir / "annotated.png"
     detections_path = output_dir / "detections.json"
     annotated.save(annotated_path, format="PNG", optimize=True)

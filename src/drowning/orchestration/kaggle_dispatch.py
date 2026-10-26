@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from drowning.db.models import Job
 from drowning.db.repositories import assert_execution_owner, claim_execution_slot, release_execution_slot, transition_job
 from drowning.domain.jobs import JobState
-from drowning.integrations.kaggle import KaggleCLIClient, KaggleError, RemoteStateUnconfirmed
+from drowning.integrations.kaggle import KaggleCLIClient, KaggleError, RemoteStateUnconfirmed, validate_checkpoint_dataset
 
 _PUSH_VERSION = re.compile(r"(?:kernel\s+)?version(?:\s+number)?\s*[:#]?\s*(\d+)", re.IGNORECASE)
 # The CLI has printed this in several shapes across versions; none of them has been checked against a live
@@ -110,6 +110,21 @@ class KaggleJobDispatcher:
         notebook_mode = notebook.get("metadata", {}).get("drowning_project", {}).get("run_mode_default")
         if notebook_mode != mode:
             raise ValueError("Kaggle notebook run mode does not match the durable job payload")
+        parent = notebook.get("metadata", {}).get("drowning_project", {}).get("parent_model")
+        if parent != payload.get("parent_model"):
+            raise ValueError("Kaggle notebook parent checkpoint does not match the durable job payload")
+        if (payload.get("options") or {}).get("continue_from_approved") and not parent:
+            raise ValueError("continuation job is missing its pinned parent checkpoint")
+        parent_ref = notebook.get("metadata", {}).get("drowning_project", {}).get("parent_dataset_ref")
+        if parent_ref != payload.get("parent_dataset_ref"):
+            raise ValueError("parent dataset reference does not match the durable job payload")
+        if parent:
+            if parent_ref not in metadata.get("dataset_sources", []):
+                raise ValueError("parent checkpoint dataset is not attached to the notebook")
+            validate_checkpoint_dataset(kernel_dir.parent / (kernel_dir.name + "-parent"), parent_ref, parent)
+        notebook_options = notebook.get("metadata", {}).get("drowning_project", {}).get("options", {})
+        if any(notebook_options.get(key) != value for key, value in (payload.get("options") or {}).items()):
+            raise ValueError("Kaggle notebook training options do not match the durable job payload")
         return self.client.validate_kernel_ref(str(metadata.get("id", "")))
 
     def dispatch(self, job_id: UUID, kernel_dir: Path, *, timeout_seconds: int = 3600) -> DispatchReceipt:
@@ -118,6 +133,8 @@ class KaggleJobDispatcher:
             if job is None:
                 raise KeyError(f"unknown job {job_id}")
             kernel_ref = self._validate_job(job, kernel_dir)
+            parent_model = (job.payload or {}).get("parent_model")
+            parent_dataset_ref = (job.payload or {}).get("parent_dataset_ref")
         # Check the local CLI before taking the shared compute slot.
         self.client.version()
         with self.session_factory() as session:
@@ -129,6 +146,18 @@ class KaggleJobDispatcher:
             job.remote_ref = kernel_ref
             job.remote_status = "push_started"
             session.commit()
+        if parent_model:
+            try:
+                self.client.push_private_checkpoint_dataset(kernel_dir.parent / (kernel_dir.name + "-parent"),
+                                                             parent_dataset_ref, parent_model)
+            except Exception as exc:
+                # A dataset upload may have reached Kaggle, but no compute kernel was submitted.
+                with self.session_factory() as session:
+                    self._transition(session, job_id, JobState.FAILED, event_type="parent_dataset_upload_failed",
+                                     phase="checkpoint_upload_failed", details={"error_type": type(exc).__name__, "kernel_pushed": False})
+                    release_execution_slot(session, job_id, self.worker_id, token, compute_stopped_confirmed=True)
+                return DispatchReceipt(str(job_id), JobState.FAILED.value, kernel_ref, None, token,
+                                       "parent dataset upload failed; no kernel was pushed")
         try:
             receipt = self.client.push_private_kernel(kernel_dir, timeout_seconds=timeout_seconds)
             version = parse_pushed_version(receipt.stdout)

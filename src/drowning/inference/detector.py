@@ -35,7 +35,12 @@ class UltralyticsPersonDetector:
             raise ValueError("configured detector class ID is not named person")
 
     def detect(self, image: Image.Image) -> list[Box]:
-        results = self.model.predict(np.asarray(image.convert("RGB")), classes=[self.person_class_id],
+        # Ultralytics treats NumPy image inputs as OpenCV BGR arrays and reverses
+        # their channels internally. Passing PIL's RGB array silently swaps the
+        # channels a second time and can suppress detections in water scenes.
+        rgb = np.asarray(image.convert("RGB"))
+        bgr = np.ascontiguousarray(rgb[..., ::-1])
+        results = self.model.predict(bgr, classes=[self.person_class_id],
                                      conf=self.confidence, verbose=False)
         boxes: list[Box] = []
         for result in results:

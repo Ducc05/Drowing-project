@@ -74,6 +74,29 @@ mapping: {...}
 
 Hệ thống **không đoán**: thiếu `timestamp_ms`, `person_id`, hộp ngoài khung hay nhãn rỗng đều làm việc chuyển đổi dừng lại và báo dòng lỗi.
 
+## Dataset YOLO không có `data.yaml` hoặc có tên file chứa video gốc
+
+Ví dụ `configs/datasets/dataset_test_1.yaml` (dataset Roboflow tải lên Kaggle chỉ có `train/images` và `train/labels`):
+
+```yaml
+paths:
+  root_env: DATASET_TEST_1_DATA_ROOT
+  marker: train/labels               # thư mục (hoặc file) phải có ở gốc dataset để notebook Kaggle tìm đúng nguồn
+  input_dir_contains: dataset-test-1 # tên dataset gắn vào notebook; bắt buộc khi hai dataset có cấu trúc giống nhau
+source_labels:
+  class_names: {0: Drowning, 1: Person out of water, 2: Swimming}   # chỉ số lớp → tên gốc, thay cho data.yaml
+mapping:
+  Drowning: {action: map, target: drowning}
+  Person out of water: {action: map, target: out_of_water}
+  Swimming: {action: map, target: swimming}
+grouping:
+  path_regex: '^train/images/(.+?)-\d+_jpg\.rf\.[0-9a-f]+\.[A-Za-z0-9]+$'   # nhóm 1 = tên video gốc
+```
+
+- `class_names` do **bạn xác nhận**: hệ thống không đoán chỉ số lớp. Chỉ số sai thì nhãn sai toàn bộ nguồn.
+- `path_regex` gom mọi bản tăng cường và mọi khung của cùng một video vào cùng một nhóm để chia tập không rò rỉ. Nhóm lấy từ tên file, không ai xác nhận, nên báo cáo ghi `filename_pattern_unconfirmed`. File không khớp biểu thức để nhóm "chưa biết" (chế độ tư vấn sẽ tự gom bằng ảnh gần giống).
+- Không có `marker` hoặc `input_dir_contains` thì notebook báo "ambiguous" và dừng khi có hai dataset trùng cấu trúc, không chọn bừa.
+
 ## Các cổng kiểm tra trước khi train
 
 | Cổng | Ý nghĩa |

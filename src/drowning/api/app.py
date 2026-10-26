@@ -64,12 +64,17 @@ class TrainSubmitRequest(BaseModel):
     reason: str = Field(default="", max_length=2000)
     idempotency_key: str = Field(min_length=8, max_length=200)
     pretrained: bool = False
+    continue_from_approved: bool = False
+    source_ids: list[str] | None = Field(default=None, min_length=1, max_length=1000)
     image_epochs: int = Field(default=5, ge=1, le=50)
     temporal_epochs: int = Field(default=5, ge=1, le=50)
     video_epochs: int = Field(default=3, ge=1, le=50)
     frame_stride_ms: int = Field(default=500, ge=100, le=5000)
     max_frames_per_video: int = Field(default=300, ge=10, le=5000)
     branch: Literal["temporal", "image_only"] = "image_only"
+    augment: bool = True
+    patience: int = Field(default=3, ge=0, le=20)
+    holdout_sources: list[str] | None = Field(default=None, min_length=1, max_length=1000)
 
 
 class ReviewMarkRequest(BaseModel):
@@ -78,6 +83,15 @@ class ReviewMarkRequest(BaseModel):
     start_ms: int = Field(ge=0)
     end_ms: int = Field(gt=0)
     verdict: Literal["correct", "wrong"]
+    expected_label: Literal["drowning", "swimming", "out_of_water"] | None = None
+    note: str = Field(default="", max_length=1000)
+
+
+class PresenceMarkRequest(BaseModel):
+    reviewer: str = Field(min_length=1, max_length=160)
+    start_ms: int = Field(ge=0)
+    end_ms: int = Field(gt=0)
+    people: int = Field(ge=0, le=50)
     expected_label: Literal["drowning", "swimming", "out_of_water"] | None = None
     note: str = Field(default="", max_length=1000)
 
@@ -405,7 +419,9 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
             body.mode, new_version=body.new_version, reason=body.reason, idempotency_key=body.idempotency_key,
             options={"pretrained": body.pretrained, "image_epochs": body.image_epochs, "temporal_epochs": body.temporal_epochs,
                      "branch": body.branch, "video_epochs": body.video_epochs, "frame_stride_ms": body.frame_stride_ms,
-                     "max_frames_per_video": body.max_frames_per_video}))
+                     "max_frames_per_video": body.max_frames_per_video,
+                     "continue_from_approved": body.continue_from_approved, "source_ids": body.source_ids,
+                     "augment": body.augment, "patience": body.patience, "holdout_sources": body.holdout_sources}))
 
     @app.post("/api/v1/jobs/{job_id}/cancel")
     def cancel_job(job_id: UUID, service: TrainService = Depends(get_train)):
@@ -605,6 +621,21 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         return marks_call(lambda: ReviewMarks(request.app.state.session_factory).add(
             job_id, service.result_file, reviewer=body.reviewer, track_id=body.track_id, start_ms=body.start_ms,
             end_ms=body.end_ms, verdict=body.verdict, expected_label=body.expected_label, note=body.note))
+
+    @app.get("/api/v1/jobs/{job_id}/presence-marks")
+    def list_presence_marks(job_id: UUID, request: Request, session: Session = Depends(get_session)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).presence_list(job_id))
+
+    @app.post("/api/v1/jobs/{job_id}/presence-marks")
+    def add_presence_mark(job_id: UUID, body: PresenceMarkRequest, request: Request,
+                          service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).presence_add(
+            job_id, service.result_file, reviewer=body.reviewer, start_ms=body.start_ms, end_ms=body.end_ms,
+            people=body.people, expected_label=body.expected_label, note=body.note))
+
+    @app.delete("/api/v1/jobs/{job_id}/presence-marks/{mark_id}")
+    def delete_presence_mark(job_id: UUID, mark_id: str, request: Request, session: Session = Depends(get_session)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).presence_delete(job_id, mark_id))
 
     @app.delete("/api/v1/jobs/{job_id}/review-marks/{mark_id}")
     def delete_review_mark(job_id: UUID, mark_id: str, request: Request, session: Session = Depends(get_session)):

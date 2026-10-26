@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from drowning.data.labels import CANONICAL_LABELS
 from drowning.api.inference import InferenceCancelled
 from drowning.inference.aggregation import TrackAggregator
+from drowning.inference.annotations import class_scores_text
 from drowning.inference.buffer import FrameCrop, TemporalWindowBuffer
 from drowning.inference.detector import PersonDetector
 from drowning.inference.tracking import Box, ByteTracker
@@ -159,12 +160,28 @@ class PersonStateInference:
             scores = record.get("class_scores")
             label_index = CLASS_KEYS.index(record["label"]) if record.get("label") in CLASS_KEYS else -1
             confidence = scores[label_index] if scores and 0 <= label_index < len(scores) else None
-            score_text = f" | {confidence * 100:.0f}%" if confidence is not None else ""
+            score_text = f" {confidence:.3f}" if confidence is not None else ""
             caption = f"{record['track_id']} | {record.get('label') or 'unknown'}{score_text} | {record['prediction_branch']}"
+            if record.get("detector_confidence") is not None:
+                caption += f" | YOLO={record['detector_confidence']:.3f}"
             if record.get("alert"):
                 caption += " | ALERT"
-            cv2.putText(annotated, caption, (x1, max(18, y1 - 7)), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.48, (255, 255, 255), 2, cv2.LINE_AA)
+            lines = [caption]
+            score_line = class_scores_text(scores)
+            if score_line:
+                lines.append(score_line)
+            top = max(0, y1 - len(lines) * 18 - 6)
+            for index, line in enumerate(lines):
+                scale = 0.40
+                (width, height), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+                if width > annotated.shape[1] - 8:
+                    scale = max(0.15, scale * max(1, annotated.shape[1] - 8) / width)
+                    (width, height), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)
+                tx = max(0, min(x1, annotated.shape[1] - width - 6))
+                ty = top + 16 + index * 18
+                cv2.rectangle(annotated, (tx, ty - height - 3), (min(annotated.shape[1], tx + width + 4), ty + baseline), (22, 30, 38), -1)
+                cv2.putText(annotated, line, (tx + 2, ty), cv2.FONT_HERSHEY_SIMPLEX,
+                            scale, (255, 255, 255), 1, cv2.LINE_AA)
         return annotated
 
     @torch.inference_mode()

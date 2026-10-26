@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 
 from drowning.data.adapters import _safe_file
 from drowning.data.labels import CANONICAL_LABELS
+from drowning.ml.augment import augment_crop, sample_rng
 from drowning.ml.model import CLASS_KEYS, torch
 from drowning.ml.preprocessing import crop_person, image_to_tensor
 
@@ -34,7 +35,8 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 class CanonicalImageCropDataset(Dataset):
     def __init__(self, crop_manifest: Path, *, split: str, output_size: int = 224,
-                 mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)):
+                 mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225), augment: bool = False, augment_seed: int = 0):
+        self.augment, self.augment_seed, self._epoch = bool(augment), int(augment_seed), 0
         self.root = crop_manifest.parent.resolve()
         self.rows = [row for row in _read_jsonl(crop_manifest)
                      if row.get("split") == split and row.get("training_eligible") is True]
@@ -49,6 +51,10 @@ class CanonicalImageCropDataset(Dataset):
     def __len__(self) -> int:
         return len(self.rows)
 
+    def set_epoch(self, epoch: int) -> None:
+        """Augmentation differs per epoch but is reproducible: it depends only on (seed, epoch, index)."""
+        self._epoch = int(epoch)
+
     def __getitem__(self, index: int):
         row = self.rows[index]
         path = _safe_file(self.root, row["crop_relative_path"])
@@ -56,6 +62,8 @@ class CanonicalImageCropDataset(Dataset):
         if digest != row["crop_sha256"]:
             raise ValueError(f"Crop checksum mismatch: {path.name}")
         with Image.open(path) as image:
+            if self.augment:
+                image = augment_crop(image, sample_rng(self.augment_seed, self._epoch, index))
             tensor = image_to_tensor(image, size=self.output_size, mean=self.mean, std=self.std)
         return tensor, CLASS_KEYS.index(row["canonical_label"])
 

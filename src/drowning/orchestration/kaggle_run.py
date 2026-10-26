@@ -41,6 +41,8 @@ def sha256_file(path: Path) -> str:
 
 def _marker_file(source: dict[str, Any]) -> str | None:
     paths = source.get("paths", {})
+    if isinstance(paths.get("marker"), str) and paths["marker"].strip():
+        return paths["marker"]  # a file or folder that must exist under the dataset root
     spec = paths.get("class_list")
     if isinstance(spec, str) and ":" in spec:
         return spec.split(":", 1)[0]
@@ -69,8 +71,12 @@ def discover_source_root(source: dict[str, Any], input_root: Path) -> dict[str, 
         directory = path.parent
         for _ in range(len(Path(marker).parts) - 1):
             directory = directory.parent
-        if len(directory.parts) - base_depth <= MAX_DISCOVERY_DEPTH and (directory / marker).is_file() and directory not in candidates:
+        if len(directory.parts) - base_depth <= MAX_DISCOVERY_DEPTH and (directory / marker).exists() and directory not in candidates:
             candidates.append(directory)
+    slug = source.get("paths", {}).get("input_dir_contains")
+    if isinstance(slug, str) and slug.strip():
+        # Two datasets can share a layout (both have train/labels), so the attached dataset's own name decides.
+        candidates = [directory for directory in candidates if slug in directory.parts]
     expected = source.get("source_labels", {}).get("expected_names")
     if expected and source.get("paths", {}).get("class_list"):
         wanted = sorted(normalize_label(name) for name in expected)

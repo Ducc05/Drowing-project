@@ -161,7 +161,7 @@ class CandidateArtifactSync:
                     schema_version=manifest["model_schema_version"], class_keys=manifest["class_keys"],
                     temporal_trained=bool(manifest.get("temporal_trained")), completion_kind="candidate", status="candidate",
                     training_job_id=job.id, dataset_fingerprint=manifest["dataset_fingerprint"],
-                    artifact_id=artifact.id, metrics={**metrics, "provenance": {
+                    artifact_id=artifact.id, metrics={**{k: v for k, v in metrics.items() if k != "validation_samples"}, "provenance": {
                         "training_job_id": str(job.id), "training_identity": (job.payload or {}).get("training_identity"),
                         "options": (job.payload or {}).get("options"), "seed": metrics.get("seed"),
                         "recipe_fingerprint": manifest.get("recipe_fingerprint"), "code_fingerprint": manifest.get("code_fingerprint"),
