@@ -28,6 +28,7 @@ drive = [
 ]
 vision = ["opencv-python-headless>=4.9,<5.0"]
 detector = ["ultralytics>=8.3,<9.0"]
+kaggle = ["kaggle>=2.2.5,<3.0"]
 
 [project.scripts]
 drownctl = "drowning.cli:main"

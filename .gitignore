@@ -1,29 +1,53 @@
+# Local agent settings and credentials
+.claude/
 .env
 .env.*
 !.env.example
+.neon
 secrets/
-local-cache/
+**/secrets/
+*.pem
+*.key
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Python environments, caches, and build output
+.venv/
+venv/
+env/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.venv/
-venv/
-dist/
-build/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
+build/
+
+# Node dependencies and build output (includes the Neon CLI tooling at the project root)
+node_modules/
+dist/
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Local runtime data, model files, downloads and generated job copies
+local-cache/
+*.db
+*.sqlite
+*.sqlite3
 *.pt
 *.pth
 *.onnx
 *.mp4
 *.avi
 *.zip
-web/node_modules/
-web/dist/
-.neon
-node_modules/
-
-# Neon CLI tooling at the project root
-/node_modules/
-
-# local run logs
-reports/*.log
+*.log
+notebooks/kernels/*/jobs/
