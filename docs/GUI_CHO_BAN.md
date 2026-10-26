@@ -71,6 +71,8 @@ Họ tự chạy `auth drive` và đăng nhập bằng Gmail của họ.
 
 ## Bước 4. Những thứ gửi qua kênh riêng (tổng kết)
 
+**Gói có sẵn:** `D:\AI\gui-cho-ban.zip` gồm các thứ riêng tư bên dưới đã điền sẵn (chuỗi database, ID thư mục Drive, tên dataset, file OAuth), hướng dẫn `DOC_TRUOC_TIEN.md` (đặt file ở đâu, test thế nào) và script kiểm tra. Gửi file zip này qua kênh riêng, dặn họ xóa sau khi cài. Bạn vẫn phải làm các việc trên web ở Bước 0 đến 3 (mời GitHub, chia sẻ Drive, Test users, chia sẻ dataset Kaggle). Nếu bạn đổi chuỗi database hoặc ID Drive sau này, nhờ mình đóng gói lại.
+
 | Gửi | Cách gửi |
 |---|---|
 | `DATABASE_URL_UNPOOLED` | tin nhắn riêng |
@@ -82,7 +84,9 @@ Họ tự chạy `auth drive` và đăng nhập bằng Gmail của họ.
 
 ## Bước 5. Cùng kiểm tra sau khi họ cài xong
 
-Nhờ họ chạy và gửi **ảnh chụp** (không có bí mật trong đầu ra):
+Cách nhanh: nhờ họ chạy `.\.venv\Scripts\python scripts\kiem_tra_cai_dat.py` và gửi ảnh chụp kết quả (script không in bí mật; dòng cuối phải là `0 loi`).
+
+Hoặc từng lệnh riêng, gửi **ảnh chụp** (không có bí mật trong đầu ra):
 ```powershell
 .\.venv\Scripts\python -m drowning.cli doctor --online
 ```
