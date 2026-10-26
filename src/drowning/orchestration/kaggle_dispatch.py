@@ -80,9 +80,11 @@ class KaggleJobDispatcher:
         if mode == "train_candidate":
             preflight = payload.get("preflight", {})
             if not (payload.get("new_version") is True and preflight.get("ready") is True
-                    and preflight.get("mapping_review_approved") is True
-                    and preflight.get("source_video_disjointness_verified") is True
-                    and preflight.get("temporal_window_count", 0) > 0
+                    and (preflight.get("review_mode") == "advisory"
+                         or (preflight.get("mapping_review_approved") is True
+                             and preflight.get("source_video_disjointness_verified") is True))
+                    and (preflight.get("temporal_window_count", 0) > 0
+                         or (payload.get("options") or {}).get("branch") == "image_only")
                     and payload.get("dataset_fingerprint")):
                 raise ValueError("train_candidate requires explicit new version, reviewed temporal preflight and dataset fingerprint")
         metadata_path = kernel_dir / "kernel-metadata.json"

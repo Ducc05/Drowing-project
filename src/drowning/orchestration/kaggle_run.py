@@ -23,6 +23,7 @@ from drowning.data.quality import build_quality_report
 from drowning.data.registry import SourceConfigError, load_source, read_class_names, validate_source
 from drowning.data.windows import build_temporal_windows
 from drowning.data.review import is_mapping_approved, load_grouping_review, mapping_fingerprint
+from drowning.data.review_rules import gating_mode
 from drowning.data.samples import build_review_sheets
 
 REPORT_NAME = "run-report.json"
@@ -184,8 +185,10 @@ def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, outpu
     started = datetime.now(timezone.utc)
     output_dir.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
+    advisory = gating_mode(sources_dir.parent / "review_policy.yaml") == "advisory"
     sources: list[dict[str, Any]] = []
     blockers: set[str] = set()
+    advisories: set[str] = set()
     for path in sorted(sources_dir.glob("*.yaml")):
         source = load_source(path, reviews_dir)
         entry: dict[str, Any] = {"source_id": source.get("source_id"), "source_version": str(source.get("source_version")),
@@ -214,8 +217,10 @@ def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, outpu
                                          work_dir, reviews_dir, sources_dir.parent / "recipes" / "temporal.yaml"))
             entry["status"] = "prepared"
             for blocker in entry["quality"]["readiness"]["blockers"]:
-                if not blocker.startswith("source_alone"):
-                    blockers.add(f"{entry['source_id']}:{blocker}")
+                if blocker.startswith("source_alone"):
+                    continue
+                unconfirmed = blocker in {"mapping_review_not_approved", "source_groups_not_verified"}
+                (advisories if advisory and unconfirmed else blockers).add(f"{entry['source_id']}:{blocker}")
             if not entry["audit"]["valid"]:
                 blockers.add(f"{entry['source_id']}:canonical_audit_failed")
         except Exception as exc:  # recorded, never swallowed: the run report is the evidence
@@ -238,7 +243,8 @@ def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, outpu
         "finished_at": datetime.now(timezone.utc).isoformat(), "code_fingerprint": code_fingerprint,
         "environment": _environment(), "sources": sources, "temporal_video_sources_prepared": len(video_sources),
         "temporal_window_count_before_split": temporal_windows,
-        "blockers": sorted(blockers), "training_started": False, "model_candidate": False,
+        "blockers": sorted(blockers), "review_mode": "advisory" if advisory else "enforced",
+        "advisories": sorted(advisories), "training_started": False, "model_candidate": False,
         "note": "Statistics describe annotations as exported, not model accuracy. Review sheets and group proposals "
                 "require a person's approval before any training input is built."}
     (output_dir / REPORT_NAME).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

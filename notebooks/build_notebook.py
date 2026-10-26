@@ -15,7 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MODES = ("prepare_only", "remote_smoke", "train_candidate")
-DEFAULT_OPTIONS = {"pretrained": False, "image_epochs": 5, "temporal_epochs": 5}
+BRANCHES = ("temporal", "image_only")
+# The web UI only trains the image head (video frames first, then images); "temporal" stays reachable through the API.
+DEFAULT_OPTIONS = {"pretrained": False, "image_epochs": 5, "temporal_epochs": 5, "branch": "image_only",
+                   "video_epochs": 3, "frame_stride_ms": 500, "max_frames_per_video": 300}
 
 
 _FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
@@ -43,6 +46,7 @@ def source_bundle() -> bytes:
         for path in sorted((ROOT / "configs" / "datasets").glob("*.yaml")):
             _add_deterministic(archive, path, path.relative_to(ROOT).as_posix())
         _add_deterministic(archive, ROOT / "configs" / "ontology.yaml", "configs/ontology.yaml")
+        _add_deterministic(archive, ROOT / "configs" / "review_policy.yaml", "configs/review_policy.yaml")
         # Approvals are bound to the mapping/group hashes they reviewed, so shipping them is safe.
         for path in sorted((ROOT / "reviews").glob("*.json")) if (ROOT / "reviews").is_dir() else []:
             _add_deterministic(archive, path, path.relative_to(ROOT).as_posix())
@@ -61,6 +65,17 @@ def normalize_options(options: dict | None) -> dict:
         raise ValueError(f"unknown run options: {sorted(unknown)}")
     if not isinstance(merged["pretrained"], bool):
         raise ValueError("pretrained must be true or false")
+    if merged["branch"] not in BRANCHES:
+        raise ValueError(f"branch must be one of {', '.join(BRANCHES)}")
+    for key in ("video_epochs",):
+        if not isinstance(merged[key], int) or isinstance(merged[key], bool) or not 1 <= merged[key] <= 50:
+            raise ValueError(f"{key} must be an integer between 1 and 50")
+    if (not isinstance(merged["frame_stride_ms"], int) or isinstance(merged["frame_stride_ms"], bool)
+            or not 100 <= merged["frame_stride_ms"] <= 5000):
+        raise ValueError("frame_stride_ms must be an integer between 100 and 5000")
+    if (not isinstance(merged["max_frames_per_video"], int) or isinstance(merged["max_frames_per_video"], bool)
+            or not 10 <= merged["max_frames_per_video"] <= 5000):
+        raise ValueError("max_frames_per_video must be an integer between 10 and 5000")
     for key in ("image_epochs", "temporal_epochs"):
         if not isinstance(merged[key], int) or isinstance(merged[key], bool) or not 1 <= merged[key] <= 50:
             raise ValueError(f"{key} must be an integer between 1 and 50")
@@ -123,7 +138,10 @@ else:
     import torch
     from drowning.orchestration.kaggle_train import prepare_training_inputs, run_train_candidate, write_blocked_report
     inputs = prepare_training_inputs(sources_dir=WORK_DIR / "configs" / "datasets", reviews_dir=WORK_DIR / "reviews",
-                                     input_root=INPUT_ROOT, work_dir=SCRATCH_DIR, recipes_dir=WORK_DIR / "configs" / "recipes")
+                                     input_root=INPUT_ROOT, work_dir=SCRATCH_DIR, recipes_dir=WORK_DIR / "configs" / "recipes",
+                                     branch=RUN_OPTIONS.get("branch", "image_only"),
+                                     frame_stride_ms=RUN_OPTIONS.get("frame_stride_ms", 500),
+                                     max_frames_per_video=RUN_OPTIONS.get("max_frames_per_video", 300))
     if Path("/kaggle/working").is_dir():
         Path("/kaggle/working/train-input-report.json").write_text(
             json.dumps(inputs["report"], ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -143,7 +161,7 @@ else:
                                       job_context={"kernel_ref": os.environ.get("KAGGLE_KERNEL_ID"),
                                                    "kernel_version": os.environ.get("KAGGLE_KERNEL_VERSION")})
         print(json.dumps({"candidate_archive": "/kaggle/working/candidate-output.zip", "approved": False,
-                          "image_validation": metrics["image_validation"], "temporal_validation": metrics["temporal_validation"]},
+                          "image_validation": metrics["image_validation"], "temporal_validation": metrics.get("temporal_validation")},
                          ensure_ascii=False, indent=2, default=str))
 '''
 
@@ -175,6 +193,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "notebooks" / "Drowning_Temporal_Kaggle.ipynb")
     parser.add_argument("--mode", choices=MODES, default="prepare_only")
     parser.add_argument("--pretrained", action="store_true")
+    parser.add_argument("--branch", choices=BRANCHES, default="image_only")
     parser.add_argument("--image-epochs", type=int, default=DEFAULT_OPTIONS["image_epochs"])
     parser.add_argument("--temporal-epochs", type=int, default=DEFAULT_OPTIONS["temporal_epochs"])
     args = parser.parse_args()

@@ -79,6 +79,8 @@ def verify_candidate_archive(archive_path: Path, extract_to: Path) -> dict[str, 
         raise ValueError("Candidate metrics and bundle model-version IDs do not match")
     if not manifest.get("code_fingerprint") or not manifest.get("recipe_fingerprint"):
         raise ValueError("Candidate bundle is missing exact code/recipe fingerprints")
+    if metrics.get("model_kind", "temporal") != manifest.get("model_kind", "temporal"):
+        raise ValueError("Candidate metrics and bundle model kinds do not match")
     if metrics.get("test_split_used") is not False:
         raise ValueError("Candidate generation must not use the holdout test split")
     return {"manifest": manifest, "metrics": metrics, "archive_sha256": sha256_file(archive_path),
@@ -157,7 +159,7 @@ class CandidateArtifactSync:
                     id=version_id,
                     model_family=manifest["model_family"], display_version=display_version,
                     schema_version=manifest["model_schema_version"], class_keys=manifest["class_keys"],
-                    temporal_trained=True, completion_kind="candidate", status="candidate",
+                    temporal_trained=bool(manifest.get("temporal_trained")), completion_kind="candidate", status="candidate",
                     training_job_id=job.id, dataset_fingerprint=manifest["dataset_fingerprint"],
                     artifact_id=artifact.id, metrics={**metrics, "provenance": {
                         "training_job_id": str(job.id), "training_identity": (job.payload or {}).get("training_identity"),

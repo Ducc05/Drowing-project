@@ -82,7 +82,8 @@ def summarize_report(report: dict[str, Any]) -> dict[str, Any]:
                        image_crops_by_split=report.get("input_report", {}).get("image_crops_by_split"),
                        temporal_windows_by_split=report.get("input_report", {}).get("temporal_windows_by_split"))
     elif report["run_mode"] == "prepare_only":
-        summary.update(blockers=report.get("blockers", []),
+        summary.update(blockers=report.get("blockers", []), advisories=report.get("advisories", []),
+                       review_mode=report.get("review_mode", "enforced"),
                        temporal_window_count_before_split=report.get("temporal_window_count_before_split", 0),
                        sources=[{k: entry.get(k) for k in ("source_id", "source_version", "status", "mapping_review",
                                                            "grouping_review", "mapping_hash", "canonical_sha256", "modality")}

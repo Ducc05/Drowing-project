@@ -66,9 +66,11 @@ class KaggleNotebookBuilderTests(unittest.TestCase):
     def test_run_options_are_validated_and_embedded(self):
         notebook = BUILDER.build_notebook("train_candidate", {"pretrained": True, "image_epochs": 3})
         self.assertEqual(notebook["metadata"]["drowning_project"]["options"],
-                         {"pretrained": True, "image_epochs": 3, "temporal_epochs": 5})
-        self.assertIn("RUN_OPTIONS = {'pretrained': True, 'image_epochs': 3, 'temporal_epochs': 5}", "".join(notebook["cells"][1]["source"]))
-        for bad in ({"pretrained": "yes"}, {"image_epochs": 0}, {"temporal_epochs": 99}, {"epochs": 3}, {"image_epochs": True}):
+                         {"pretrained": True, "image_epochs": 3, "temporal_epochs": 5, "branch": "image_only",
+                          "video_epochs": 3, "frame_stride_ms": 500, "max_frames_per_video": 300})
+        self.assertIn("RUN_OPTIONS = {'pretrained': True, 'image_epochs': 3, 'temporal_epochs': 5, 'branch': 'image_only', 'video_epochs': 3, 'frame_stride_ms': 500, 'max_frames_per_video': 300}", "".join(notebook["cells"][1]["source"]))
+        for bad in ({"pretrained": "yes"}, {"image_epochs": 0}, {"temporal_epochs": 99}, {"epochs": 3}, {"image_epochs": True},
+                    {"frame_stride_ms": 10}, {"max_frames_per_video": 1}, {"video_epochs": 0}):
             with self.assertRaises(ValueError):
                 BUILDER.build_notebook("train_candidate", bad)
 

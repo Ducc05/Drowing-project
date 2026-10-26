@@ -92,14 +92,29 @@ class KaggleRunTests(unittest.TestCase):
         source_dir = self.base / "out" / "per-source" / "alanoud_swimming_drowning@4"
         for name in ("scan.json", "audit.json", "quality.json", "mapping-report.json", "proposed-groups.json", "sheets/samples.json"):
             self.assertTrue((source_dir / name).is_file(), name)
-        self.assertIn("alanoud_swimming_drowning:mapping_review_not_approved", report["blockers"])
-        self.assertIn("alanoud_swimming_drowning:source_groups_not_verified", report["blockers"])
+        # The shipped policy is advisory: unconfirmed mapping/groups are reported but do not block.
+        self.assertEqual(report["review_mode"], "advisory")
+        self.assertIn("alanoud_swimming_drowning:mapping_review_not_approved", report["advisories"])
+        self.assertIn("alanoud_swimming_drowning:source_groups_not_verified", report["advisories"])
+        self.assertNotIn("alanoud_swimming_drowning:mapping_review_not_approved", report["blockers"])
         self.assertIn("no_temporal_video_source_prepared", report["blockers"])
         self.assertNotIn(str(self.inputs), json.dumps(report))
         archive = package_output(self.base / "out", self.base / PACKAGE_NAME)
         with zipfile.ZipFile(archive) as bundle:
             self.assertIn(REPORT_NAME, bundle.namelist())
             self.assertTrue(all("\\" not in name and not name.startswith("/") for name in bundle.namelist()))
+
+    def test_enforced_policy_turns_the_same_findings_into_blockers(self):
+        make_yolo_export(self.inputs / "pool-export")
+        project = self.base / "enforced-project"
+        (project / "configs").mkdir(parents=True)
+        import shutil
+        shutil.copytree(self.sources_dir, project / "configs" / "datasets")
+        (project / "configs" / "review_policy.yaml").write_text(yaml.safe_dump({"version": 1, "gating": {"mode": "enforced"}}), encoding="utf-8")
+        report = self.prepare(sources_dir=project / "configs" / "datasets")
+        self.assertEqual(report["review_mode"], "enforced")
+        self.assertIn("alanoud_swimming_drowning:mapping_review_not_approved", report["blockers"])
+        self.assertEqual(report["advisories"], [])
 
     def test_prepare_isolates_a_failing_source(self):
         make_yolo_export(self.inputs / "pool-export")

@@ -180,6 +180,55 @@ class PrepareTrainingInputsTests(TrainingInputFixture):
         self.assertEqual(class_weights(Counter()), [1.0, 1.0, 1.0])
 
 
+class AdvisoryReviewTests(TrainingInputFixture):
+    def advisory(self):
+        (self.base / "review_policy.yaml").write_text(yaml.safe_dump({"version": 1, "gating": {"mode": "advisory"}}), encoding="utf-8")
+
+    def test_unconfirmed_sources_are_used_with_automatic_groups_and_labeled_as_such(self):
+        self.make_image_source(approved=False, groups=False)
+        self.make_video_source(approved=False)
+        self.advisory()
+        inputs = self.prepare()
+        self.assertEqual(inputs["blockers"], [], inputs["report"])
+        report = inputs["report"]
+        self.assertEqual((report["review_mode"], report["excluded_sources"]), ("advisory", {}))
+        self.assertEqual(report["unconfirmed"]["pool_images"]["mapping"], "unconfirmed")
+        self.assertEqual(report["unconfirmed"]["pool_images"]["groups"]["images"], "auto_near_duplicate_unconfirmed")
+        self.assertEqual(report["unconfirmed"]["pool_videos"]["mapping"], "unconfirmed")
+        self.assertFalse(report["source_video_disjointness_verified"])
+        crops = [json.loads(l) for l in inputs["paths"]["crop_manifest"].read_text(encoding="utf-8").splitlines()]
+        self.assertTrue(crops and all(c["training_eligible"] for c in crops))
+        merged = [json.loads(l) for l in inputs["paths"]["merged"].read_text(encoding="utf-8").splitlines()]
+        assured = {m.get("grouping_assurance") for m in merged if m["entity"] == "media" and m["source_id"] == "pool_images"}
+        self.assertEqual(assured, {"auto_near_duplicate_unconfirmed"})
+
+    def test_automatic_groups_keep_near_duplicates_together_and_never_touch_declared_groups(self):
+        from drowning.data.autogroup import assign_automatic_groups
+        self.make_image_source(approved=True, groups=False)
+        canonical = self.base / "auto.jsonl"
+        from drowning.data.adapters import convert_to_jsonl
+        source = yaml.safe_load((self.sources / "pool_images.yaml").read_text(encoding="utf-8"))
+        convert_to_jsonl(source, self.inputs / "pool-images", canonical)
+        # a near-identical copy of image 0 in the other split: a leak the export itself did not prevent
+        texture(0).save(self.inputs / "pool-images" / "train" / "images" / "copy0.png")
+        (self.inputs / "pool-images" / "train" / "labels" / "copy0.txt").write_text("0 0.5 0.5 0.3 0.3\n", encoding="utf-8")
+        canonical2 = self.base / "auto2.jsonl"
+        convert_to_jsonl(source, self.inputs / "pool-images", canonical2)
+        stats = assign_automatic_groups(canonical2, self.inputs / "pool-images")
+        self.assertEqual(stats["images_grouped"], self.IMAGES + 1)
+        media = {json.loads(l)["raw_relative_path"]: json.loads(l) for l in canonical2.read_text(encoding="utf-8").splitlines() if '"entity": "media"' in l}
+        self.assertEqual(media["valid/images/i0.png"]["global_group_id"], media["train/images/copy0.png"]["global_group_id"])
+        self.assertEqual(len({m["global_group_id"] for m in media.values()}), self.IMAGES)  # the copy joined its original
+        self.assertTrue(all(m["grouping_status"] == "verified" and m["grouping_assurance"] for m in media.values()))
+        again = assign_automatic_groups(canonical2, self.inputs / "pool-images")
+        self.assertEqual(again["images_grouped"], 0)  # already grouped: nothing is rewritten
+
+    def test_enforced_mode_still_excludes_unconfirmed_sources(self):
+        self.make_image_source(approved=False, groups=False)
+        report = self.prepare()["report"]
+        self.assertEqual(report["excluded_sources"], {"pool_images": "mapping_review_not_approved"})
+
+
 class TrainCandidateContractTests(TrainingInputFixture):
     def test_cpu_candidate_is_refused_without_the_explicit_contract_flag(self):
         inputs = self.prepare()
