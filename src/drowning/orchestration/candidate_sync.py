@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
 import shutil
 import stat
 import tempfile
@@ -142,6 +144,19 @@ class CandidateArtifactSync:
         manifest, metrics = verified["manifest"], verified["metrics"]
         with self.session_factory() as session:
             self._owned(session, job.id)
+            current = session.get(Job, job.id)
+            payload = dict(current.payload or {})
+            if payload.get("dataset_identity_pending") is True:
+                actual = manifest.get("dataset_fingerprint") or ""
+                request = payload.get("training_request_identity") or ""
+                if not re.fullmatch(r"[a-f0-9]{64}", actual) or not re.fullmatch(r"[a-f0-9]{64}", request):
+                    raise ValueError("Direct training output is missing its verified dataset or request identity")
+                identity = hashlib.sha256(json.dumps({"training_request_identity": request,
+                                                      "dataset_fingerprint": actual}, sort_keys=True).encode()).hexdigest()
+                payload.update(dataset_fingerprint=actual, dataset_identity_pending=False,
+                               dataset_identity_source="training_notebook", training_identity=identity)
+                current.payload = payload
+            job.payload = payload
             artifact = session.scalar(select(Artifact).where(
                 Artifact.job_id == job.id, Artifact.role == "candidate_bundle",
                 Artifact.sha256 == verified["archive_sha256"]))
@@ -163,6 +178,8 @@ class CandidateArtifactSync:
                     training_job_id=job.id, dataset_fingerprint=manifest["dataset_fingerprint"],
                     artifact_id=artifact.id, metrics={**{k: v for k, v in metrics.items() if k != "validation_samples"}, "provenance": {
                         "training_job_id": str(job.id), "training_identity": (job.payload or {}).get("training_identity"),
+                        "training_request_identity": (job.payload or {}).get("training_request_identity"),
+                        "dataset_identity_source": (job.payload or {}).get("dataset_identity_source"),
                         "options": (job.payload or {}).get("options"), "seed": metrics.get("seed"),
                         "recipe_fingerprint": manifest.get("recipe_fingerprint"), "code_fingerprint": manifest.get("code_fingerprint"),
                         "dataset_fingerprint": manifest.get("dataset_fingerprint"),

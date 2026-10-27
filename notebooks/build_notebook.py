@@ -194,6 +194,8 @@ else:
 '''
     train_cell = '''if RUN_MODE == "train_candidate":
     import torch
+    if not torch.cuda.is_available():
+        raise RuntimeError("Candidate training requires the selected Kaggle GPU runtime; no CPU fallback is allowed")
     from drowning.orchestration.kaggle_train import prepare_training_inputs, run_train_candidate, write_blocked_report
     inputs = prepare_training_inputs(sources_dir=WORK_DIR / "configs" / "datasets", reviews_dir=WORK_DIR / "reviews",
                                      input_root=INPUT_ROOT, work_dir=SCRATCH_DIR, recipes_dir=WORK_DIR / "configs" / "recipes",
@@ -212,8 +214,6 @@ else:
                              code_fingerprint=SOURCE_BUNDLE_SHA256)
         print("TRAINING NOT STARTED:", inputs["blockers"])
     else:
-        if not torch.cuda.is_available():
-            raise RuntimeError("Candidate training requires the selected Kaggle GPU runtime; no CPU fallback is allowed")
         metrics = run_train_candidate(inputs, device="cuda", options=RUN_OPTIONS,
                                       parent_bundle_dir=PARENT_MODEL_DIR,
                                       output_dir=Path("/kaggle/working/drowning-candidate"),
@@ -233,8 +233,8 @@ else:
         {"cell_type": "markdown", "metadata": {}, "source": [
             "# Drowning temporal Kaggle worker\n",
             "Private GPU notebook. Default mode is `prepare_only`; this notebook never silently trains.\n",
-            "`remote_smoke` runs the real model on random tensors to confirm the GPU. `train_candidate` uses only sources whose "
-            "label mapping and source groups a person approved, and never touches the test split.\n",
+            "`prepare_only` and `remote_smoke` are optional diagnostics. `train_candidate` checks CUDA and validates selected "
+            "training inputs in this run, records unconfirmed sources under the review policy, and never uses the test split for training.\n",
         ]},
         code(setup_cell), code(environment_cell), code(run_cell), code(train_cell),
     ]
@@ -243,6 +243,7 @@ else:
         "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                      "language_info": {"name": "python", "version": "3.11"},
                      "drowning_project": {"run_mode_default": run_mode, "private": True, "training_executor": "kaggle",
+                                          "runtime_data_validation": run_mode == "train_candidate",
                                           "parent_model": parent_model,
                                           "parent_dataset_ref": parent_dataset_ref,
                                           "prepare_cache_source_versions": prepare_cache.get("source_versions", 0),

@@ -38,9 +38,9 @@ const stateText: Record<string, string> = {
 }
 
 const STEPS: Array<{ mode: Mode; title: string; lead: string }> = [
-  { mode: 'prepare_only', title: '1 · Chuẩn bị & kiểm tra dữ liệu trên Kaggle', lead: 'Đối chiếu dữ liệu và cấu hình; chỉ chuẩn bị nguồn mới hoặc thay đổi, dùng lại báo cáo đã kiểm chứng cho nguồn không đổi. Không train.' },
-  { mode: 'remote_smoke', title: '2 · Kiểm tra GPU & phụ thuộc (smoke)', lead: 'Chạy mô hình thật trên dữ liệu ngẫu nhiên để xác nhận GPU, thư viện và gradient. Không tạo model.' },
-  { mode: 'train_candidate', title: '3 · Train model ứng viên', lead: 'Train hai giai đoạn trên GPU Kaggle, tạo model ứng viên. Model chỉ được dùng sau khi bạn xem video thật và duyệt.' },
+  { mode: 'train_candidate', title: 'Train model ứng viên', lead: 'Có thể train ngay. Notebook tự kiểm tra, tạo dữ liệu đầu vào và xác nhận GPU trong cùng lượt chạy; không cần chạy prepare hay smoke trước.' },
+  { mode: 'prepare_only', title: 'Chuẩn bị & xem báo cáo dữ liệu (tùy chọn)', lead: 'Dùng khi muốn khảo sát dữ liệu trước khi train. Chỉ chuẩn bị nguồn mới hoặc thay đổi, dùng lại kết quả đã kiểm chứng cho nguồn không đổi.' },
+  { mode: 'remote_smoke', title: 'Kiểm tra GPU & thư viện (tùy chọn)', lead: 'Chạy mô hình trên dữ liệu ngẫu nhiên để chẩn đoán GPU, thư viện và gradient. Không tạo model và không bắt buộc trước khi train.' },
 ]
 
 function Timeline({ jobId, active }: { jobId: string; active: boolean }) {
@@ -109,8 +109,8 @@ export default function TrainPage() {
 
   const env = pre?.environment
   return <div className="page-stack">
-    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> TRAIN</div><h1>Chạy trên Kaggle theo từng bước</h1>
-      <p className="subtitle">Không bỏ qua bước nào: chuẩn bị dữ liệu → bạn duyệt → kiểm tra GPU → train ứng viên. Train thật chỉ chạy trên Kaggle, không có train local.</p></header>
+    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> TRAIN</div><h1>Train model trên Kaggle</h1>
+      <p className="subtitle">Chọn dataset và cấu hình để train ngay trên Kaggle. Chuẩn bị báo cáo dữ liệu và kiểm tra GPU riêng là các công cụ tùy chọn.</p></header>
     <Banner error={action.error} notice={action.notice} />
 
     <Panel kicker="MÔI TRƯỜNG" title="Điều kiện để chạy Kaggle" subtitle="Chỉ hiển thị đã/chưa cấu hình, không bao giờ hiển thị giá trị bí mật.">
@@ -138,10 +138,10 @@ export default function TrainPage() {
       const continuationReady = Boolean(pre?.approved_model?.cached_locally && pre.approved_model.model_kind === 'image_tracked')
       const candidateNeedsInput = step.mode === 'train_candidate' && (!newVersion || reason.trim().length < 10
         || !supportsTrainingOptions || selected.length === 0 || (continueFromApproved && !continuationReady))
-      return <Panel key={step.mode} kicker="BƯỚC" title={step.title} subtitle={step.lead}
+      return <Panel key={step.mode} kicker={step.mode === 'train_candidate' ? 'TRAIN' : 'TÙY CHỌN'} title={step.title} subtitle={step.lead}
         right={last ? <Tag tone={stateTone(last.state)}>lần gần nhất: {stateText[last.state] ?? last.state}</Tag> : <Tag tone="warn">chưa chạy</Tag>}>
         {blockers.length > 0 ? <ul className="findings">{blockers.map((b) => <li className="warn" key={b}>{b}</li>)}</ul>
-          : <div className="callout ok">Đủ điều kiện chạy bước này.</div>}
+          : <div className="callout ok">Đủ điều kiện gửi yêu cầu lên Kaggle.</div>}
         {step.mode === 'prepare_only' && <p className="muted">Nguồn không đổi vẫn được đối chiếu checksum. Báo cáo cũ chưa có dấu kiểm chứng hoặc cache không còn trên máy sẽ cần chuẩn bị lại một lần.</p>}
         {step.mode === 'train_candidate' && <>
           {pre && !supportsTrainingOptions && <div className="callout warn">Backend chưa tải phiên bản hỗ trợ train tiếp và chọn dataset. Chờ job đang chạy hoàn tất rồi khởi động lại backend.</div>}
@@ -174,7 +174,7 @@ export default function TrainPage() {
         </>}
         <div className="toolbar">
           <button className="primary-button" disabled={!mode?.allowed || action.busy || candidateNeedsInput} onClick={() => void submit(step.mode)}>
-            {step.mode === 'train_candidate' && pre?.approved_model && !newVersion ? 'Kiểm tra model đã có' : 'Xếp vào hàng đợi'}</button>
+            {step.mode === 'train_candidate' ? (pre?.approved_model && !newVersion ? 'Kiểm tra model đã có' : 'Train ngay') : 'Chạy kiểm tra'}</button>
           {last?.summary && last.job_id && <button className="secondary-button big" onClick={() => setOpen(open === `report:${last.job_id}` ? null : `report:${last.job_id}`)}>Xem báo cáo lần gần nhất</button>}
         </div>
         {last && open === `report:${last.job_id}` && <RunReportView jobId={last.job_id} />}

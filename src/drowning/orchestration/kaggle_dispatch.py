@@ -79,14 +79,18 @@ class KaggleJobDispatcher:
             raise ValueError("unsupported Kaggle run mode")
         if mode == "train_candidate":
             preflight = payload.get("preflight", {})
+            deferred_inputs = (preflight.get("runtime_data_validation") is True
+                               and payload.get("dataset_identity_pending") is True
+                               and re.fullmatch(r"[a-f0-9]{64}", payload.get("dataset_request_fingerprint") or ""))
             if not (payload.get("new_version") is True and preflight.get("ready") is True
                     and (preflight.get("review_mode") == "advisory"
                          or (preflight.get("mapping_review_approved") is True
                              and preflight.get("source_video_disjointness_verified") is True))
                     and (preflight.get("temporal_window_count", 0) > 0
-                         or (payload.get("options") or {}).get("branch") == "image_only")
-                    and payload.get("dataset_fingerprint")):
-                raise ValueError("train_candidate requires explicit new version, reviewed temporal preflight and dataset fingerprint")
+                         or (payload.get("options") or {}).get("branch") == "image_only"
+                         or preflight.get("runtime_data_validation") is True)
+                    and (payload.get("dataset_fingerprint") or deferred_inputs)):
+                raise ValueError("train_candidate requires explicit new version, review policy and verified or runtime-validated dataset identity")
         metadata_path = kernel_dir / "kernel-metadata.json"
         if not metadata_path.is_file():
             raise ValueError("kernel directory must contain kernel-metadata.json")
@@ -110,6 +114,9 @@ class KaggleJobDispatcher:
         notebook_mode = notebook.get("metadata", {}).get("drowning_project", {}).get("run_mode_default")
         if notebook_mode != mode:
             raise ValueError("Kaggle notebook run mode does not match the durable job payload")
+        if mode == "train_candidate" and (payload.get("preflight") or {}).get("runtime_data_validation"):
+            if notebook.get("metadata", {}).get("drowning_project", {}).get("runtime_data_validation") is not True:
+                raise ValueError("direct training requires a notebook that validates its training inputs")
         parent = notebook.get("metadata", {}).get("drowning_project", {}).get("parent_model")
         if parent != payload.get("parent_model"):
             raise ValueError("Kaggle notebook parent checkpoint does not match the durable job payload")

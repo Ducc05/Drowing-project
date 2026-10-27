@@ -133,34 +133,26 @@ class TrainService:
         if not environment["kaggle_notebook_private"]:
             base.append("KAGGLE_NOTEBOOK_PRIVATE must stay true")
         modes = {"prepare_only": {"blocked_by": list(base)}}
-        smoke_block = list(base)
-        if prepare is None:
-            smoke_block.append("run prepare_only first and review its report")
-        elif stale:
-            smoke_block.append("the mapping changed after the last prepare run: " + ", ".join(stale))
-        smoke_block += approvals_missing
-        modes["remote_smoke"] = {"blocked_by": smoke_block}
-        train_block = list(smoke_block)
-        if smoke is None:
-            train_block.append("run remote_smoke first")
-        elif not (smoke.payload["run_summary"].get("gpu_confirmed") and smoke.payload["run_summary"].get("gradients_ok")):
-            train_block.append("the last remote_smoke did not confirm a GPU with gradients")
+        # Diagnostic jobs are optional. The training notebook validates its own
+        # selected inputs and requires CUDA before starting the training loop.
+        modes["remote_smoke"] = {"blocked_by": list(base)}
+        train_block = list(base) + approvals_missing
         windows = (prepare_summary or {}).get("temporal_window_count_before_split", 0)
-        # The temporal branch needs labeled video; the image-only branch trains on image crops and aggregates by tracker ID at inference.
-        branch_blocked = {"temporal": (["no temporal windows: a labeled video source with person/time annotations is required"]
-                                       if prepare_summary and windows == 0 else []),
-                          "image_only": []}
+        # Old reports cannot establish which windows the current data produces.
+        branch_blocked = {"temporal": [], "image_only": []}
         if not environment["drive_folder_configured"] or not environment["drive_token_file_present"]:
             train_block.append("Google Drive must be configured to publish a candidate")
         if approved is not None:
             train_block.append("an approved model already exists; training a new one needs an explicit new version")
         modes["train_candidate"] = {"blocked_by": train_block, "requires_new_version_flag": True,
+                                    "requires_prepare": False, "requires_smoke": False,
                                     "branch_blocked_by": branch_blocked}
         for entry in modes.values():
             effective = [b for b in entry["blocked_by"] if not b.startswith("an approved model already exists")]
             entry["allowed"] = not effective
         return {
-            "capabilities": {"continue_from_approved": True, "source_selection": True, "incremental_prepare": True},
+            "capabilities": {"continue_from_approved": True, "source_selection": True,
+                             "incremental_prepare": True, "direct_train": True},
             "environment": environment, "sources": sources, "stale_sources": stale,
             "latest_prepare": self._run_view(prepare), "latest_smoke": self._run_view(smoke),
             "latest_job": ({"job_id": str(recent.id), "mode": (recent.payload or {}).get("mode"), "state": recent.state}
@@ -222,6 +214,7 @@ class TrainService:
         """Hash of everything that decides the trained weights: data, mappings, recipes, code, options, seed."""
         recipes = self.project_root / "configs" / "recipes"
         document = {"dataset": payload["dataset_fingerprint"],
+                    "dataset_request": payload.get("dataset_request_fingerprint"),
                     "mappings": sorted((s["source_id"], s["mapping_hash"]) for s in view["sources"]),
                     "recipes": [hashlib.sha256((recipes / name).read_bytes().replace(bytes([13, 10]), bytes([10]))).hexdigest()
                                 for name in ("image.yaml", "temporal.yaml")],
@@ -353,17 +346,38 @@ class TrainService:
             if payload["options"]["continue_from_approved"]:
                 parent_dir, payload["parent_model"] = self._parent_checkpoint(view["approved_model"], payload["options"]["branch"])
             selected = payload["options"].get("source_ids")
+            selected_sources = [s for s in view["sources"] if selected is None or s["source_id"] in selected]
             if selected is not None:
                 summary = {**summary, "sources": [s for s in summary.get("sources", []) if s["source_id"] in selected]}
-            payload.update(dataset_fingerprint=self._dataset_fingerprint(summary), preflight={
+            seen = {s["source_id"]: s for s in summary.get("sources", [])}
+            prepared_snapshot = bool(selected_sources) and all(
+                s["source_id"] in seen and seen[s["source_id"]].get("status") == "prepared"
+                and seen[s["source_id"]].get("mapping_hash") == s["mapping_hash"]
+                and seen[s["source_id"]].get("source_version") == s["source_version"]
+                and re.fullmatch(r"[a-f0-9]{64}", seen[s["source_id"]].get("canonical_sha256") or "")
+                for s in selected_sources)
+            request_identity = {"sources": [(s["source_id"], s["source_version"], s["mapping_hash"]) for s in selected_sources],
+                                "attached_datasets": sorted(self.settings.kaggle_dataset_sources)}
+            request_fingerprint = hashlib.sha256(json.dumps(request_identity, sort_keys=True).encode()).hexdigest()
+            payload.update(dataset_fingerprint=self._dataset_fingerprint(summary) if prepared_snapshot else None,
+                           dataset_request_fingerprint=request_fingerprint,
+                           dataset_identity_pending=not prepared_snapshot, preflight={
                 "ready": True, "review_mode": view["review_mode"],
-                "mapping_review_approved": all(s["mapping_approved"] for s in view["sources"]),
-                "source_video_disjointness_verified": all(s["groups_verified"] for s in view["sources"]),
-                "temporal_window_count": view["temporal_window_count_before_split"]})
-            payload["training_identity"] = self._training_identity(payload, view)
-            existing = self._same_training(payload["training_identity"])
-            if existing is not None:
-                return existing
+                "mapping_review_approved": all(s["mapping_approved"] for s in selected_sources),
+                "source_video_disjointness_verified": all(s["groups_verified"] for s in selected_sources),
+                "temporal_window_count": view["temporal_window_count_before_split"] if prepared_snapshot else 0,
+                "runtime_data_validation": True})
+            identity = self._training_identity(payload, {**view, "sources": selected_sources})
+            if prepared_snapshot:
+                payload["training_identity"] = identity
+                existing = self._same_training(identity)
+                if existing is not None:
+                    return existing
+            else:
+                # A request hash is not a verified data-content hash. Resolve
+                # that identity from the notebook's actual candidate output.
+                payload["training_request_identity"] = identity
+                payload["training_identity"] = None
         with self.factory() as session:
             job, created = create_job(session, job_type="prepare" if mode == "prepare_only" else "train",
                                       idempotency_key=idempotency_key, payload=payload)

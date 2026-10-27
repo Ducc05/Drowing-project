@@ -118,19 +118,16 @@ class TrainServiceTests(unittest.TestCase):
             self.assertIn(text, joined)
         self.assertFalse(view["environment"]["kaggle_cli_installed"])
 
-    def test_prepare_is_allowed_once_configured_but_smoke_needs_a_reviewed_prepare(self):
-        service = self.service()
+    def test_prepare_and_smoke_are_optional_diagnostics_for_direct_training(self):
+        service = self.service(mode="advisory")
         view = service.preflight()
-        self.assertTrue(view["modes"]["prepare_only"]["allowed"])
-        self.assertIn("run prepare_only first", " ".join(view["modes"]["remote_smoke"]["blocked_by"]))
-        self.completed_prepare()
-        blocked = " ".join(service.preflight()["modes"]["remote_smoke"]["blocked_by"])
-        self.assertIn("mapping not approved", blocked)
-        self.approve_everything()
-        # approvals change the mapping_review overlay but not the mapping, so the prepare is still current
-        view = service.preflight()
-        self.assertEqual(view["stale_sources"], [])
-        self.assertTrue(view["modes"]["remote_smoke"]["allowed"], view["modes"]["remote_smoke"])
+        for mode in ("prepare_only", "remote_smoke", "train_candidate"):
+            self.assertTrue(view["modes"][mode]["allowed"], view["modes"][mode])
+        self.assertIsNone(view["latest_prepare"])
+        self.assertIsNone(view["latest_smoke"])
+        self.assertFalse(view["modes"]["train_candidate"]["requires_prepare"])
+        self.assertFalse(view["modes"]["train_candidate"]["requires_smoke"])
+        self.assertTrue(view["capabilities"]["direct_train"])
 
     def test_advisory_review_never_blocks_smoke_or_train_and_says_what_is_unconfirmed(self):
         service = self.service(mode="advisory")
@@ -169,7 +166,8 @@ class TrainServiceTests(unittest.TestCase):
         path.write_text(yaml.safe_dump(data), encoding="utf-8")
         view = service.preflight()
         self.assertEqual(view["stale_sources"], ["alanoud_swimming_drowning"])
-        self.assertIn("mapping changed after the last prepare", " ".join(view["modes"]["remote_smoke"]["blocked_by"]))
+        self.assertTrue(view["modes"]["remote_smoke"]["allowed"])
+        self.assertNotIn("mapping changed after", " ".join(view["modes"]["train_candidate"]["blocked_by"]))
 
     # -- submission ------------------------------------------------------------------------
     def test_prepare_carries_verified_source_cache_and_ignores_tampered_archives(self):
@@ -227,48 +225,69 @@ class TrainServiceTests(unittest.TestCase):
             self.service(credentials=False).submit("prepare_only", new_version=False, reason="", idempotency_key="prepare-request-2")
         self.assertTrue(any("credentials" in reason for reason in caught.exception.reasons))
         with self.assertRaises(TrainBlocked):
-            self.service().submit("remote_smoke", new_version=False, reason="", idempotency_key="smoke-request-1")
+            self.service(cli=False).submit("remote_smoke", new_version=False, reason="", idempotency_key="smoke-request-1")
         with self.factory() as session:
             self.assertEqual(session.scalars(select(Job)).all(), [])
 
-    def test_train_candidate_needs_explicit_new_version_smoke_gpu_windows_and_passes_the_dispatcher_gate(self):
-        service = self.service()
-        self.completed_prepare(windows=0)
-        self.approve_everything()
-        smoke_id = self.completed_smoke(gpu=False)
-        with self.assertRaises(TrainBlocked) as caught:
-            service.submit("train_candidate", new_version=True, reason="first candidate", idempotency_key="train-request-1",
-                           options={"branch": "temporal"})
-        reasons = " ".join(caught.exception.reasons)
-        for text in ("did not confirm a GPU", "no temporal windows"):
-            self.assertIn(text, reasons)
-        with self.factory() as session:
-            session.delete(session.get(Job, smoke_id))
-            session.commit()
-        self.completed_smoke(gpu=True)
-        self.completed_prepare(windows=6)
+    def test_direct_training_without_prepare_or_successful_smoke_passes_dispatcher_and_validates_in_notebook(self):
+        service = self.service(mode="advisory")
+        self.completed_smoke(gpu=False)  # an old diagnostic failure is not a training prerequisite
         with self.assertRaises(TrainBlocked) as caught:
             service.submit("train_candidate", new_version=False, reason="x", idempotency_key="train-request-2")
         self.assertIn("explicit new version", " ".join(caught.exception.reasons))
         result = service.submit("train_candidate", new_version=True, reason="First temporal candidate on reviewed data",
-                                idempotency_key="train-request-3")
+                                idempotency_key="train-request-3", options={"branch": "temporal"})
         self.assertEqual(result["status"], "queued")
         with self.factory() as session:
             job = session.get(Job, UUID_FROM(result["job"]["id"]))
-        self.assertEqual(job.payload["preflight"]["temporal_window_count"], 6)
-        self.assertEqual(len(job.payload["dataset_fingerprint"]), 64)
+        self.assertTrue(job.payload["preflight"]["runtime_data_validation"])
+        self.assertTrue(job.payload["dataset_identity_pending"])
+        self.assertIsNone(job.payload["dataset_fingerprint"])
+        self.assertIsNone(job.payload["training_identity"])
+        self.assertEqual(len(job.payload["training_request_identity"]), 64)
+        self.assertEqual(len(job.payload["dataset_request_fingerprint"]), 64)
         dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
         self.assertEqual(dispatcher._validate_job(job, Path(job.payload["kernel_dir"])), "owner/drowning-temporal")
+
+    def test_stale_prepare_neither_blocks_training_nor_supplies_a_fake_content_identity(self):
+        service = self.service(mode="advisory")
+        self.completed_prepare()
+        path = self.sources / "alanoud_swimming_drowning_v4.yaml"
+        source = yaml.safe_load(path.read_text(encoding="utf-8"))
+        source["mapping"]["Swimming"] = {"action": "review"}
+        path.write_text(yaml.safe_dump(source), encoding="utf-8")
+        request = dict(new_version=True, reason="Direct training with a changed mapping")
+        result = service.submit("train_candidate", idempotency_key="direct-stale-1", **request)
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(result["job"]["id"]))
+            self.assertIsNone(job.payload["dataset_fingerprint"])
+            self.assertTrue(job.payload["dataset_identity_pending"])
+        repeat = service.submit("train_candidate", idempotency_key="direct-stale-1", **request)
+        self.assertEqual(repeat["job"]["id"], result["job"]["id"])
+        another = service.submit("train_candidate", idempotency_key="direct-stale-2", **request)
+        self.assertEqual(another["status"], "queued")
+        self.assertNotEqual(another["job"]["id"], result["job"]["id"])
+
+    def test_direct_training_dispatch_rejects_a_notebook_without_runtime_validation(self):
+        service = self.service(mode="advisory")
+        result = service.submit("train_candidate", new_version=True, reason="Check direct notebook validation",
+                                idempotency_key="direct-validation-1")
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(result["job"]["id"]))
+        folder = Path(job.payload["kernel_dir"])
+        meta = json.loads((folder / "kernel-metadata.json").read_text(encoding="utf-8"))
+        code = folder / meta["code_file"]
+        notebook = json.loads(code.read_text(encoding="utf-8"))
+        notebook["metadata"]["drowning_project"].pop("runtime_data_validation")
+        code.write_text(json.dumps(notebook), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "validates its training inputs"):
+            KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")._validate_job(job, folder)
 
     def test_image_mode_is_the_default_and_needs_no_temporal_windows_but_passes_the_dispatcher_gate(self):
         service = self.service()
         self.completed_prepare(windows=0)
         self.approve_everything()
         self.completed_smoke()
-        with self.assertRaises(TrainBlocked) as caught:
-            service.submit("train_candidate", new_version=True, reason="temporal on image-only data", idempotency_key="train-temporal-1",
-                           options={"branch": "temporal"})
-        self.assertIn("no temporal windows", " ".join(caught.exception.reasons))
         result = service.submit("train_candidate", new_version=True, reason="Image mode on the labeled image data",
                                 idempotency_key="train-image-1")
         self.assertEqual(result["status"], "queued")
@@ -421,6 +440,7 @@ class TrainServiceTests(unittest.TestCase):
 
     def test_http_preflight_and_submit_use_the_real_project(self):
         settings = Settings.from_env({**ENV, "KAGGLE_KERNEL_DIR": str(self.base / "kernels"),
+                                      "GOOGLE_OAUTH_TOKEN_FILE": str(self.token),
                                       "INPUT_CACHE_DIR": str(self.base / "inputs")})
         with self.factory() as session:
             session.add(Job(job_type="inference", state="completed", phase="x", idempotency_key="warm", payload={}))
@@ -440,9 +460,13 @@ class TrainServiceTests(unittest.TestCase):
 
         view = asyncio.run(call("GET", "/api/v1/train/preflight")).json()
         self.assertTrue(view["modes"]["prepare_only"]["allowed"])
-        blocked = asyncio.run(call("POST", "/api/v1/train/submit", json={"mode": "remote_smoke", "idempotency_key": "smoke-http-1"}))
-        self.assertEqual(blocked.status_code, 409)
-        self.assertIn("run prepare_only first", " ".join(blocked.json()["detail"]["reasons"]))
+        smoke = asyncio.run(call("POST", "/api/v1/train/submit", json={"mode": "remote_smoke", "idempotency_key": "smoke-http-1"}))
+        self.assertEqual(smoke.status_code, 200, smoke.text)
+        direct = asyncio.run(call("POST", "/api/v1/train/submit", json={
+            "mode": "train_candidate", "idempotency_key": "direct-http-1", "new_version": True,
+            "reason": "Train directly without prepare or smoke", "source_ids": ["dataset_test_1"]}))
+        self.assertEqual(direct.status_code, 200, direct.text)
+        self.assertEqual(direct.json()["status"], "queued")
         queued = asyncio.run(call("POST", "/api/v1/train/submit", json={"mode": "prepare_only", "idempotency_key": "prepare-http-1"}))
         self.assertEqual(queued.status_code, 200, queued.text)
         job_id = queued.json()["job"]["id"]

@@ -152,6 +152,25 @@ class CandidateSyncTests(unittest.TestCase):
         self.assertEqual(provenance["code_fingerprint"], "c" * 64)
         self.assertEqual(provenance["archive_sha256"], artifact.sha256)
 
+    def test_direct_training_resolves_dataset_identity_only_from_verified_candidate_output(self):
+        job_id = self.make_collecting_job()
+        with self.factory() as session:
+            job = session.get(Job, job_id)
+            job.payload = {**job.payload, "dataset_identity_pending": True,
+                           "dataset_fingerprint": None, "training_identity": None,
+                           "training_request_identity": "a" * 64}
+            session.commit()
+        result = self.sync.collect(job_id)
+        with self.factory() as session:
+            job = session.get(Job, job_id)
+            model = session.get(ModelVersion, UUID(result["model_version_id"]))
+            self.assertEqual(job.payload["dataset_fingerprint"], "d" * 64)
+            self.assertFalse(job.payload["dataset_identity_pending"])
+            self.assertEqual(len(job.payload["training_identity"]), 64)
+            self.assertEqual(model.dataset_fingerprint, "d" * 64)
+            self.assertEqual(model.metrics["provenance"]["dataset_identity_source"], "training_notebook")
+            self.assertEqual(model.metrics["provenance"]["training_identity"], job.payload["training_identity"])
+
     def test_collect_exact_output_registers_candidate_and_releases_confirmed_compute(self):
         job_id = self.make_collecting_job()
         result = self.sync.collect(job_id)

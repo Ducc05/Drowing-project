@@ -75,10 +75,14 @@ Chưa kiểm chứng với tài khoản thật (cần theo dõi lần chạy đ�
 ## Thứ tự chạy lần đầu
 
 1. `drownctl doctor` → điền hết mục bắt buộc → `drownctl db upgrade` → `drownctl serve` → mở `http://127.0.0.1:8000`.
-2. Trang **Dữ liệu**: bấm *Chuẩn bị tài liệu duyệt* → xem ảnh mẫu, duyệt ánh xạ nhãn → xem báo cáo chất lượng → xác nhận nhóm ảnh trùng.
-3. Trang **Train**: bước 1 *prepare_only* (chạy trên Kaggle, xem báo cáo) → bước 2 *remote_smoke* (xác nhận GPU) → bước 3 *train_candidate* (chỉ khi có video có nhãn theo người và thời gian).
+2. Nếu muốn khảo sát dữ liệu trước: vào trang **Dữ liệu** để xem ảnh mẫu, ánh xạ nhãn, chất lượng và nhóm ảnh trùng. Theo policy advisory hiện tại, review chưa xác nhận được ghi rõ trong báo cáo.
+3. Trang **Train**: chọn dataset, chọn khởi tạo, epoch và yêu cầu phiên bản mới, rồi bấm **Train ngay**. Không cần chạy `prepare_only` hoặc `remote_smoke` trước. Notebook train kiểm tra GPU, chuyển đổi/kiểm tra dữ liệu và tạo input trong cùng lượt chạy. Nhánh `image_only` hỗ trợ ảnh có bounding box; nhánh temporal cần dữ liệu video/người/thời gian phù hợp và được kiểm tra ngay trong notebook.
 4. Trang **Đánh giá**: tải model ứng viên về máy, chạy thử video của bạn, đánh dấu đoạn đúng/sai, rồi mới duyệt hoặc từ chối.
 5. Trang **Camera**: Start/Stop với model đã duyệt.
+
+`prepare_only` là công cụ tùy chọn để xem báo cáo dữ liệu trước; `remote_smoke` là công cụ tùy chọn để chẩn đoán GPU và thư viện. Báo cáo prepare cũ thiếu, đã thay đổi hoặc smoke cũ thất bại không tự chặn yêu cầu train mới. Điều kiện môi trường, chọn nguồn hợp lệ và chính sách review vẫn được kiểm tra; dữ liệu không hợp lệ sẽ tạo báo cáo chặn trong lượt train và không tạo model.
+
+Khi train trực tiếp chưa có snapshot prepare phù hợp, job ghi rõ fingerprint dữ liệu đang chờ xác nhận. Chỉ sau khi thu và kiểm chứng output thực tế, hệ thống mới ghi fingerprint và danh tính training hoàn chỉnh. Không dùng hash của tập rỗng hoặc báo cáo cũ sai mapping để tái sử dụng một model khác.
 
 ## Chuẩn bị tăng dần theo từng nguồn
 
@@ -101,12 +105,12 @@ Mỗi phiên bản model trong bảng `model_versions` kèm `artifacts` có: ID 
 
 Ba cơ chế để mọi người ra cùng kết quả:
 1. **Cùng một checkpoint:** máy nào cũng tải đúng file ghi trong bản ghi và chỉ dùng khi SHA-256 và danh tính model khớp. Đây là cách đảm bảo chắc chắn.
-2. **Không train lại thứ đã train:** mỗi yêu cầu `train_candidate` có một mã `training_identity` (băm của dữ liệu, ánh xạ nhãn, recipe, code, tùy chọn, seed). Yêu cầu trùng hệt trả về job/model đã có thay vì train lại. Mã băm code không phụ thuộc máy hay giờ sửa file.
+2. **Tái sử dụng khi có danh tính dữ liệu:** yêu cầu có snapshot prepare phù hợp được so sánh bằng `training_identity` (dữ liệu, ánh xạ nhãn, recipe, code, tùy chọn, seed). Yêu cầu trùng hệt trả về job/model đã có. Với train trực tiếp chưa xác nhận được dữ liệu, không tái sử dụng model hoàn thành chỉ dựa vào tên dataset; cùng `idempotency_key` vẫn trả đúng job đã tạo. Mã băm code không phụ thuộc máy hay giờ sửa file.
 3. **Train có tính tất định:** seed cố định, thuật toán tất định, xáo dữ liệu có seed. Test cục bộ xác nhận hai lần train cùng đầu vào cho trọng số giống hệt từng bit, đổi seed thì khác. Trên GPU Kaggle chỉ nên kỳ vọng giống hệt khi cùng loại GPU và cùng phiên bản thư viện; Kaggle không cho chọn GPU, nên nếu cần kết quả chắc chắn hãy dùng cơ chế 1 và 2.
 
 ## Train tiếp từ model chính
 
-1. Đăng ký dataset mới trong `configs/datasets/`, khai báo ánh xạ nhãn và gắn dataset private vào `KAGGLE_DATASET_SOURCES`. Chạy lại bước chuẩn bị dữ liệu và kiểm tra GPU khi dữ liệu thay đổi.
+1. Đăng ký dataset mới trong `configs/datasets/`, khai báo ánh xạ nhãn và gắn dataset private vào `KAGGLE_DATASET_SOURCES`. Có thể train tiếp ngay; prepare và smoke riêng chỉ cần khi muốn kiểm tra trước.
 2. Ở Tổng quan, đồng bộ model đã duyệt về máy. Chỉ model chính hiện tại được dùng làm gốc; model phải cùng loại và cùng hợp đồng tiền xử lý/kiến trúc với chế độ train.
 3. Ở Train, yêu cầu phiên bản mới, nhập lý do, chọn **Train tiếp model chính**, rồi đánh dấu các dataset dùng trong lượt này. Các dataset không chọn sẽ không được đưa vào training inputs. Chưa có form thêm nguồn dataset trực tiếp trên web.
 4. Job ghim ID và checksum của model gốc, lưu bản sao manifest/trọng số riêng. Khi dispatch, hệ thống tạo một dataset checkpoint **private** trên Kaggle dành riêng cho job, chờ dataset sẵn sàng rồi mới gửi notebook. Notebook chỉ chứa ID/checksum, đọc trọng số từ dataset gắn vào và kiểm tra lại trước khi tạo optimizer mới. Không đưa token Drive vào notebook. Việc duyệt model khác sau khi tạo job không đổi checkpoint của job đã xếp hàng. Nếu upload checkpoint thất bại hoặc chưa sẵn sàng trong thời gian chờ, job thất bại và nhả ô compute; kernel chưa được gửi. Dataset của một upload bị ngắt có thể còn trên tài khoản Kaggle để người dùng dọn sau.

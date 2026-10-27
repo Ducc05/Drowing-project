@@ -5,6 +5,7 @@ import io
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,15 @@ class KaggleNotebookBuilderTests(unittest.TestCase):
                     {"source_ids": ["a"], "holdout_sources": ["b"]}):
             with self.assertRaises(ValueError):
                 BUILDER.build_notebook("train_candidate", bad)
+
+    def test_direct_training_checks_gpu_before_expensive_input_preparation(self):
+        notebook = BUILDER.build_notebook("train_candidate")
+        cell = "".join(notebook["cells"][-1]["source"])
+        with patch("torch.cuda.is_available", return_value=False), \
+                patch("drowning.orchestration.kaggle_train.prepare_training_inputs") as prepare:
+            with self.assertRaisesRegex(RuntimeError, "no CPU fallback"):
+                exec(compile(cell, "direct-training-cell", "exec"), {"RUN_MODE": "train_candidate"})
+            prepare.assert_not_called()
 
     def test_kernel_template_is_private_and_gpu_enabled(self):
         import json
