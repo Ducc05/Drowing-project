@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
@@ -158,7 +160,7 @@ class TrainService:
             effective = [b for b in entry["blocked_by"] if not b.startswith("an approved model already exists")]
             entry["allowed"] = not effective
         return {
-            "capabilities": {"continue_from_approved": True, "source_selection": True},
+            "capabilities": {"continue_from_approved": True, "source_selection": True, "incremental_prepare": True},
             "environment": environment, "sources": sources, "stale_sources": stale,
             "latest_prepare": self._run_view(prepare), "latest_smoke": self._run_view(smoke),
             "latest_job": ({"job_id": str(recent.id), "mode": (recent.payload or {}).get("mode"), "state": recent.state}
@@ -185,6 +187,36 @@ class TrainService:
     def _notebook_builder(self):
         self._materializer()  # puts the project root on sys.path
         return importlib.import_module("notebooks.build_notebook")
+
+    def _prepare_cache(self) -> dict:
+        """Recover snapshots only from locally available, checksum-verified run archives."""
+        from drowning.data.prepare_cache import MANIFEST, bundle_snapshots, file_sha256
+        from drowning.orchestration.run_collector import verify_run_archive
+
+        with self.factory() as session:
+            jobs = session.scalars(select(Job).where(Job.state == "completed")
+                                   .order_by(Job.created_at.desc())).all()
+            records = [(str(j.id), dict(j.payload or {})) for j in jobs
+                       if (j.payload or {}).get("mode") == "prepare_only"][:20]
+        with tempfile.TemporaryDirectory(prefix="drown-prepare-cache-") as temporary:
+            candidates = []
+            for job_id, payload in records:
+                archive = Path(payload.get("run_archive") or "")
+                digest = payload.get("run_archive_sha256")
+                if not digest or not archive.is_file():
+                    continue
+                try:
+                    if file_sha256(archive) != digest:
+                        continue
+                    with zipfile.ZipFile(archive) as bundle:
+                        if not any(name.endswith("/" + MANIFEST) for name in bundle.namelist()):
+                            continue  # legacy output has no content-bound cache identity
+                    extracted = Path(temporary) / job_id
+                    verify_run_archive(archive, extracted, expected_mode="prepare_only")
+                    candidates.extend((job_id, p.parent) for p in sorted(extracted.rglob(MANIFEST)))
+                except (OSError, ValueError, KeyError, zipfile.BadZipFile):
+                    continue
+            return bundle_snapshots(candidates)
 
     def _training_identity(self, payload: dict[str, Any], view: dict[str, Any]) -> str:
         """Hash of everything that decides the trained weights: data, mappings, recipes, code, options, seed."""
@@ -300,14 +332,16 @@ class TrainService:
                     blocked.append("unknown dataset source IDs: " + ", ".join(sorted(unknown)))
         if blocked:
             raise TrainBlocked(blocked)
-        # Kaggle's push timeout is the kernel's maximum run time, so training needs far longer than a check.
+        # This is the remote execution deadline, not the upload request timeout.
+        # Data preparation can exceed an hour; allow prepare/train the documented
+        # 12-hour CPU/GPU session budget instead of ending them prematurely.
         if mode in {"prepare_only", "remote_smoke"}:
             active = self._active_run(mode, idempotency_key)
             if active is not None:
                 return active
         payload: dict[str, Any] = {"mode": mode, "executor": "kaggle", "new_version": bool(new_version),
                                    "reason": reason.strip(), "requested_via": "web",
-                                   "push_timeout_seconds": {"prepare_only": 3600, "remote_smoke": 1800, "train_candidate": 28800}[mode]}
+                                   "push_timeout_seconds": {"prepare_only": 43200, "remote_smoke": 1800, "train_candidate": 43200}[mode]}
         if mode == "train_candidate":
             try:
                 payload["options"] = self._notebook_builder().normalize_options(options)
@@ -339,11 +373,12 @@ class TrainService:
             parent_dataset_ref = (self.settings.kaggle_kernel_ref.split("/")[0] + "/drown-parent-" + job.id.hex
                                   if parent_dir is not None else None)
             try:
+                prepare_cache = self._prepare_cache() if mode == "prepare_only" else None
                 path = self._materializer().materialize_kernel(self.settings.kaggle_kernel_ref, target, mode=mode,
                                                                dataset_sources=list(self.settings.kaggle_dataset_sources),
                                                                options=payload.get("options"), parent_bundle_dir=parent_dir,
                                                                parent_model=payload.get("parent_model"),
-                                                               parent_dataset_ref=parent_dataset_ref)
+                                                               parent_dataset_ref=parent_dataset_ref, prepare_cache=prepare_cache)
             except Exception as exc:
                 with self.factory() as session:
                     transition_job(session, job.id, JobState.FAILED, event_type="kernel_materialization_failed",
@@ -352,7 +387,8 @@ class TrainService:
             with self.factory() as session:
                 stored = session.get(Job, job.id)
                 stored.payload = {**stored.payload, "kernel_dir": str(path.resolve()),
-                                  "parent_dataset_ref": parent_dataset_ref}
+                                  "parent_dataset_ref": parent_dataset_ref,
+                                  "prepare_cache_source_versions": (prepare_cache or {}).get("source_versions", 0)}
                 session.commit()
                 session.refresh(stored)
                 job = stored

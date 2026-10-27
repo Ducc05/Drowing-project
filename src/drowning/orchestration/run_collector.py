@@ -83,10 +83,14 @@ def summarize_report(report: dict[str, Any]) -> dict[str, Any]:
                        temporal_windows_by_split=report.get("input_report", {}).get("temporal_windows_by_split"))
     elif report["run_mode"] == "prepare_only":
         summary.update(blockers=report.get("blockers", []), advisories=report.get("advisories", []),
+                       incremental_prepare=report.get("incremental_prepare"),
                        review_mode=report.get("review_mode", "enforced"),
                        temporal_window_count_before_split=report.get("temporal_window_count_before_split", 0),
                        sources=[{k: entry.get(k) for k in ("source_id", "source_version", "status", "mapping_review",
-                                                           "grouping_review", "mapping_hash", "canonical_sha256", "modality")}
+                                                           "grouping_review", "mapping_hash", "canonical_sha256", "modality",
+                                                           "prepare_fingerprint", "data_fingerprint", "configuration_fingerprint",
+                                                           "processor_fingerprint", "runtime_fingerprint", "cache_status",
+                                                           "cache_origin_job_id")}
                                 for entry in report.get("sources", [])])
     else:
         summary.update(gpu_confirmed=bool(report.get("gpu_confirmed")), device=report.get("device"),

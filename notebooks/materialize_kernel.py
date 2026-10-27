@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def materialize_kernel(kernel_ref: str, output_dir: Path, *, mode: str = "prepare_only",
                        dataset_sources: list[str] | None = None, options: dict | None = None,
                        parent_bundle_dir: Path | None = None, parent_model: dict | None = None,
-                       parent_dataset_ref: str | None = None) -> Path:
+                       parent_dataset_ref: str | None = None, prepare_cache: dict | None = None) -> Path:
     if not kernel_ref or "/" not in kernel_ref or len(kernel_ref.split("/")) != 2:
         raise ValueError("KAGGLE_KERNEL_REF must be configured as owner/slug")
     if mode not in {"prepare_only", "remote_smoke", "train_candidate"}:
@@ -53,7 +53,8 @@ def materialize_kernel(kernel_ref: str, output_dir: Path, *, mode: str = "prepar
             "id": parent_dataset_ref, "title": "Drowning parent " + parent_model["id"][:8],
             "description": "Private model checkpoint artifact for this DrowningProject training job.",
             "licenses": [{"name": "other"}]}), encoding="utf-8")
-    notebook = build_notebook(mode, options, parent_dataset_ref=parent_dataset_ref, parent_model=parent_model)
+    notebook = build_notebook(mode, options, parent_dataset_ref=parent_dataset_ref, parent_model=parent_model,
+                              prepare_cache=prepare_cache)
     metadata_template = json.loads((ROOT / "notebooks" / "kernel-metadata.template.json").read_text(encoding="utf-8"))
     metadata_template["id"] = kernel_ref
     metadata_template["code_file"] = "Drowning_Temporal_Kaggle.ipynb"

@@ -105,7 +105,8 @@ def normalize_options(options: dict | None) -> dict:
 
 
 def build_notebook(run_mode: str = "prepare_only", options: dict | None = None, *,
-                   parent_dataset_ref: str | None = None, parent_model: dict | None = None) -> dict:
+                   parent_dataset_ref: str | None = None, parent_model: dict | None = None,
+                   prepare_cache: dict | None = None) -> dict:
     if run_mode not in MODES:
         raise ValueError("run_mode must be prepare_only, remote_smoke, or train_candidate")
     run_options = normalize_options(options)
@@ -115,6 +116,7 @@ def build_notebook(run_mode: str = "prepare_only", options: dict | None = None, 
     elif parent_dataset_ref is not None or parent_model is not None:
         raise ValueError("parent checkpoint supplied for a fresh training run")
     payload = base64.b64encode(source_bundle()).decode("ascii")
+    prepare_cache = prepare_cache or {"payload": "", "source_versions": 0}
     setup_cell = f'''# Generated from the current repository source. Do not edit the embedded bundle by hand.
 import base64, hashlib, io, os, sys, zipfile, importlib.util, json
 from pathlib import Path
@@ -127,6 +129,17 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 INPUT_ROOT = Path(os.environ.get("DROWN_INPUT_ROOT", "/kaggle/input"))
 OUTPUT_DIR = Path(os.environ.get("DROWN_OUTPUT_DIR", "/kaggle/working/run-output"))
 SCRATCH_DIR = Path(os.environ.get("DROWN_SCRATCH_DIR", "/kaggle/temp/derived"))
+PREPARE_CACHE_DIR = Path(os.environ.get("DROWN_PREPARE_CACHE_DIR", "/kaggle/temp/prepare-cache"))
+PREPARE_CACHE_B64 = {prepare_cache.get("payload", "")!r}
+if {run_mode!r} == "prepare_only" and PREPARE_CACHE_B64:
+    PREPARE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(base64.b64decode(PREPARE_CACHE_B64))) as _cache_archive:
+        for _member in _cache_archive.infolist():
+            _cache_target = (PREPARE_CACHE_DIR / _member.filename).resolve()
+            _cache_target.relative_to(PREPARE_CACHE_DIR.resolve())
+            if "\\\\" in _member.filename or ":" in _member.filename:
+                raise ValueError("Unsafe prepare cache path")
+        _cache_archive.extractall(PREPARE_CACHE_DIR)
 with zipfile.ZipFile(io.BytesIO(base64.b64decode(SOURCE_BUNDLE_B64))) as archive:
     archive.extractall(WORK_DIR)
 sys.path.insert(0, str(WORK_DIR / "src"))
@@ -166,7 +179,7 @@ RUN_ARCHIVE = Path(os.environ.get("DROWN_ARCHIVE_PATH", "/kaggle/working/run-out
 if RUN_MODE == "prepare_only":
     run_report = run_prepare(sources_dir=WORK_DIR / "configs" / "datasets", reviews_dir=WORK_DIR / "reviews",
                              input_root=INPUT_ROOT, output_dir=OUTPUT_DIR, work_dir=SCRATCH_DIR,
-                             code_fingerprint=SOURCE_BUNDLE_SHA256)
+                             code_fingerprint=SOURCE_BUNDLE_SHA256, cache_dir=PREPARE_CACHE_DIR)
     package_output(OUTPUT_DIR, RUN_ARCHIVE)
     print(json.dumps({"run_mode": RUN_MODE, "blockers": run_report["blockers"],
                       "sources": [{key: entry.get(key) for key in ("source_id", "status", "mapping_review", "grouping_review")}
@@ -232,6 +245,7 @@ else:
                      "drowning_project": {"run_mode_default": run_mode, "private": True, "training_executor": "kaggle",
                                           "parent_model": parent_model,
                                           "parent_dataset_ref": parent_dataset_ref,
+                                          "prepare_cache_source_versions": prepare_cache.get("source_versions", 0),
                                           "options": run_options}},
         "nbformat": 4,
         "nbformat_minor": 5,

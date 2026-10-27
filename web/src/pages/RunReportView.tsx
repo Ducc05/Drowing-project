@@ -4,6 +4,7 @@ import { Bars, Tag } from '../ui'
 
 type SourceEntry = {
   source_id: string; source_version: string; status: string; error?: string; mapping_review?: string; grouping_review?: string
+  cache_status?: 'prepared' | 'reused'; cache_origin_job_id?: string | null
   input?: { status: string; root_relative?: string; candidates?: string[] }
   scan?: { media_count: number; annotation_count: number; malformed_annotation_count: number }
   audit?: { valid: boolean; issue_count: number; exact_duplicate_groups: number; same_box_label_conflicts: number }
@@ -50,6 +51,7 @@ function SourceBlock({ entry, detail }: { entry: SourceEntry; detail?: { quality
   const total = Math.max(1, quality?.counts.observations ?? 1)
   return <div className="mapping-card">
     <div className="mapping-head"><b>{entry.source_id}</b><Tag tone={entry.status === 'prepared' ? 'ok' : 'bad'}>{entry.status === 'prepared' ? 'đã xử lý' : entry.status}</Tag>
+      {entry.cache_status && <Tag tone={entry.cache_status === 'reused' ? 'info' : 'ok'}>{entry.cache_status === 'reused' ? 'dùng lại kết quả đã kiểm chứng' : 'chuẩn bị mới'}</Tag>}
       <Tag tone={entry.mapping_review === 'approved' ? 'ok' : 'warn'}>ánh xạ: {entry.mapping_review === 'approved' ? 'đã duyệt' : 'chưa duyệt'}</Tag>
       <Tag tone={entry.grouping_review === 'verified' ? 'ok' : 'warn'}>nhóm: {entry.grouping_review === 'verified' ? 'đã xác nhận' : 'chưa xác nhận'}</Tag></div>
     {entry.error && <div className="callout bad">{entry.error}</div>}

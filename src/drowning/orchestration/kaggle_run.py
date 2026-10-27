@@ -25,6 +25,7 @@ from drowning.data.windows import build_temporal_windows
 from drowning.data.review import is_mapping_approved, load_grouping_review, mapping_fingerprint
 from drowning.data.review_rules import gating_mode
 from drowning.data.samples import build_review_sheets
+from drowning.data.prepare_cache import restore_snapshot, source_fingerprints, write_snapshot
 
 REPORT_NAME = "run-report.json"
 PACKAGE_NAME = "run-output.zip"
@@ -186,7 +187,8 @@ def _prepare_source(source: dict[str, Any], root: Path, source_dir: Path, work_d
 
 
 def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, output_dir: Path, work_dir: Path,
-                code_fingerprint: str, only_sources: set[str] | None = None) -> dict[str, Any]:
+                code_fingerprint: str, only_sources: set[str] | None = None,
+                cache_dir: Path | None = None) -> dict[str, Any]:
     """Inspect every registered source present under ``input_root``; writes ``run-report.json``."""
     started = datetime.now(timezone.utc)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -219,9 +221,22 @@ def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, outpu
             continue
         entry["input"]["root_relative"] = found["candidates"][0]
         try:
-            entry.update(_prepare_source(source, found["root"], output_dir / "per-source" / f"{source['source_id']}@{source['source_version']}",
-                                         work_dir, reviews_dir, sources_dir.parent / "recipes" / "temporal.yaml"))
-            entry["status"] = "prepared"
+            folder = output_dir / "per-source" / f"{source['source_id']}@{source['source_version']}"
+            print(f"prepare {source['source_id']}: checking data and configuration checksums", flush=True)
+            fingerprints = source_fingerprints(source, found["root"], sources_dir.parent)
+            cached = restore_snapshot(cache_dir, folder, fingerprints["prepare_fingerprint"], str(source["source_id"]))
+            if cached is not None:
+                current_input = entry["input"]
+                entry.update(cached, input=current_input)
+                print(f"prepare {source['source_id']}: reused verified reports", flush=True)
+            else:
+                print(f"prepare {source['source_id']}: new/changed source, preparing", flush=True)
+                entry.update(_prepare_source(source, found["root"], folder,
+                                             work_dir, reviews_dir, sources_dir.parent / "recipes" / "temporal.yaml"))
+                entry.update(status="prepared", cache_status="prepared", **fingerprints)
+                if entry["audit"]["valid"]:
+                    write_snapshot(folder, entry)
+                print(f"prepare {source['source_id']}: finished", flush=True)
             for blocker in entry["quality"]["readiness"]["blockers"]:
                 if blocker.startswith("source_alone"):
                     continue
@@ -251,6 +266,8 @@ def run_prepare(*, sources_dir: Path, reviews_dir: Path, input_root: Path, outpu
         "temporal_window_count_before_split": temporal_windows,
         "blockers": sorted(blockers), "review_mode": "advisory" if advisory else "enforced",
         "advisories": sorted(advisories), "training_started": False, "model_candidate": False,
+        "incremental_prepare": {"reused_sources": [s["source_id"] for s in prepared if s.get("cache_status") == "reused"],
+                                "prepared_sources": [s["source_id"] for s in prepared if s.get("cache_status") != "reused"]},
         "note": "Statistics describe annotations as exported, not model accuracy. Review sheets and group proposals "
                 "require a person's approval before any training input is built."}
     (output_dir / REPORT_NAME).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

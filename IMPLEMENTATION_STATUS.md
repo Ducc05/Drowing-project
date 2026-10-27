@@ -284,3 +284,49 @@ Direction from the user: training data comes from labeled datasets they find; th
 - **Code written:** image-only training branch (video frames first, then images; video frames sampled per person every 500 ms, label changes always kept, at most 300 per video), `image_tracked` bundle kind with per-track score aggregation at inference, optional (advisory) data review with automatic rules and AI verdicts, UTF-8-safe CLI output. The web UI trains the image branch only; the temporal branch remains reachable through the API.
 - **Not verified:** accuracy of any model (none evaluated yet); aggregation parameters are unbenchmarked defaults; no labeled video source exists, so the video-frame phase has been tested only on synthetic fixtures; setup by a second person with their own Kaggle/Google accounts has not been tried.
 - **Repository:** git root moved to `DrowningProject`; `codex-cli-handoff` is outside the repository.
+
+
+## 2026-10-27 - User-requested dataset-test-1 training from scratch
+
+- User explicitly authorized real Kaggle training on `vuduc792005/dataset-test-1`, with no inherited checkpoint or pretrained weights.
+- Live Kaggle access to this dataset was verified. Prepare job `52bfa558-597a-480e-aad4-b6e7edb885a8` was submitted as notebook `vuduc792005/drowning-temporal`, version 6; Kaggle reports RUNNING.
+- Local API/supervisor started at `http://127.0.0.1:8000`. A dedicated monitor in `tmp/train_dataset_test_1_scratch_20261027.py` waits for prepare completion, then submits exactly one idempotent candidate request: `pretrained=false`, `continue_from_approved=false`, `source_ids=[dataset_test_1]`, image-only branch, 30 maximum image epochs, early-stopping patience 5. The training notebook attaches only the requested dataset; global `.env` values are preserved.
+- Current runtime state and the final verification, when available, are recorded in `reports/dataset-test-1-scratch-20261027.json`. A submitted prepare job is not a trained candidate. No result metrics or model quality are claimed at this milestone.
+- Dataset mapping/source grouping remain unconfirmed under the existing advisory policy. Existing approved models are preserved; the new model will remain a candidate pending user review.
+
+
+## 2026-10-27 - Training workflow guide exported
+
+- Created `docs/HUONG_DAN_TRAIN_MODEL_TU_DAU.md`: dataset discovery, label validation, source-based splitting, Kaggle upload, source registration, notebook configuration, prepare/smoke/train, candidate collection and review.
+- Document distinguishes dataset attachments from source selection, random initialization from pretrained/continuation, and unconfirmed labels from verified mappings.
+- Verified UTF-8 content, balanced code fences and local reference targets. Documentation export does not establish a completed training run.
+
+
+## 2026-10-27 - Ignore generated reports in Git
+
+- Added `/reports/` to `.gitignore` and removed four previously tracked report files from the Git index; local files are retained. No commit or push was made.
+
+
+## 2026-10-27 - Fresh-training preparation cancelled by execution deadline
+
+- Verified Kaggle version 6 reports CANCEL_ACKNOWLEDGED with failure message: exceeded max allowed execution duration. Durable prepare job configured `push_timeout_seconds=3600`; cancellation was observed after about one hour of running. No local user cancel event was recorded.
+- The fresh-model monitor exited after prepare cancellation; train_candidate was never submitted and no new candidate was created.
+- Downloaded exact-version logs and partial reports to `reports/cancelled-prepare-v6/`. Alanoud reports completed; dataset_test_1 scan counted 10,140 images, 18,752 annotations and zero malformed rows, but later reports are absent. The exact slow operation remains unverified.
+- Diagnosis only: no source changes and no retry submitted at this milestone. Preparation timing/progress needs investigation before selecting the retry budget.
+
+
+## 2026-10-27 - Raise Kaggle preparation/training execution budget and retry
+
+- Changed new prepare_only jobs from 3,600 to 43,200 seconds and new train_candidate jobs from 28,800 to 43,200 seconds, matching the documented Kaggle CPU/GPU maximum. Smoke checks keep their 1,800-second limit. This removes the shorter project deadlines, not Kaggle platform limits.
+- Validation: `python -m unittest tests.test_train_service -q` passed all 16 tests, including assertions for the generated prepare and image-training job runtime budgets. Pytest is not installed; the existing unittest suite was run directly.
+- Confirmed no active/queued compute before restarting the local API to load the change. Submitted replacement prepare job `39dd8cda-4cf2-4cff-af00-c0ee7bbbe7a8`; durable payload verified to contain 43,200 seconds.
+- Restarted the fresh-training monitor for the replacement prepare job with a 13-hour per-stage monitoring allowance; report is `reports/dataset-test-1-scratch-20261027-retry-12h.json`. Subsequent training still selects only dataset_test_1, pretrained=false, continue_from_approved=false, 30 maximum image epochs and patience=5. No new model completion is claimed.
+
+
+## 2026-10-27 - Incremental per-source preparation cache
+
+- Implemented content-verified source snapshots: data filenames/bytes, source descriptor/reviews, recipes/policy/ontology, prepare code and library versions decide reuse. Unchanged sources restore reports and review sheets; changed/new sources execute conversion, audit and quality preparation. Invalid/incomplete cache falls back to preparation. Review approval is never inferred.
+- Submission embeds snapshots only from checksum-verified local output archives of completed prepare jobs; raw data/model weights and unrelated files are excluded. Restored source artifacts remain available in the new collected report. UI labels sources as newly prepared or reused.
+- Validation: 66 related tests passed; after the final cache hardening/dependency additions, all 8 cache tests passed, including transport through a generated notebook in a fresh Python process. Web production build and live index/asset checks passed. Local API restarted and confirmed incremental_prepare=true with healthy supervisor and no active/queued jobs. Train route is /#train.
+- Current legacy archives have zero usable snapshots; a new baseline is required before real-source reuse. Cloud reuse on real data is unverified. Cache applies to prepare reports, not training input construction, and automatic Drive cache download at submission is not implemented.
+- Existing Kaggle version 7 was already cancelled remotely before the local service restart; status supplied no failure message. No replacement cloud job was submitted as part of this code change. See reports/incremental-prepare-implementation.json.

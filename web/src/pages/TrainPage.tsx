@@ -38,7 +38,7 @@ const stateText: Record<string, string> = {
 }
 
 const STEPS: Array<{ mode: Mode; title: string; lead: string }> = [
-  { mode: 'prepare_only', title: '1 · Chuẩn bị & kiểm tra dữ liệu trên Kaggle', lead: 'Quét, chuyển đổi, kiểm tra và tạo báo cáo ảnh mẫu trên Kaggle. Không train.' },
+  { mode: 'prepare_only', title: '1 · Chuẩn bị & kiểm tra dữ liệu trên Kaggle', lead: 'Đối chiếu dữ liệu và cấu hình; chỉ chuẩn bị nguồn mới hoặc thay đổi, dùng lại báo cáo đã kiểm chứng cho nguồn không đổi. Không train.' },
   { mode: 'remote_smoke', title: '2 · Kiểm tra GPU & phụ thuộc (smoke)', lead: 'Chạy mô hình thật trên dữ liệu ngẫu nhiên để xác nhận GPU, thư viện và gradient. Không tạo model.' },
   { mode: 'train_candidate', title: '3 · Train model ứng viên', lead: 'Train hai giai đoạn trên GPU Kaggle, tạo model ứng viên. Model chỉ được dùng sau khi bạn xem video thật và duyệt.' },
 ]
@@ -142,6 +142,7 @@ export default function TrainPage() {
         right={last ? <Tag tone={stateTone(last.state)}>lần gần nhất: {stateText[last.state] ?? last.state}</Tag> : <Tag tone="warn">chưa chạy</Tag>}>
         {blockers.length > 0 ? <ul className="findings">{blockers.map((b) => <li className="warn" key={b}>{b}</li>)}</ul>
           : <div className="callout ok">Đủ điều kiện chạy bước này.</div>}
+        {step.mode === 'prepare_only' && <p className="muted">Nguồn không đổi vẫn được đối chiếu checksum. Báo cáo cũ chưa có dấu kiểm chứng hoặc cache không còn trên máy sẽ cần chuẩn bị lại một lần.</p>}
         {step.mode === 'train_candidate' && <>
           {pre && !supportsTrainingOptions && <div className="callout warn">Backend chưa tải phiên bản hỗ trợ train tiếp và chọn dataset. Chờ job đang chạy hoàn tất rồi khởi động lại backend.</div>}
           {pre?.approved_model && <div className="callout info">Đã có model được duyệt ({pre.approved_model.display_version}). Hệ thống sẽ <b>không</b> train lại trừ khi bạn yêu cầu phiên bản mới.</div>}

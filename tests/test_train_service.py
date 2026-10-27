@@ -20,7 +20,7 @@ from drowning.data.registry import load_source
 from drowning.data.review import record_grouping_review, record_mapping_review
 from drowning.db.models import Artifact, Base, ExecutionSlot, Job, ModelRegistry, ModelVersion
 from drowning.orchestration.kaggle_dispatch import KaggleJobDispatcher
-from drowning.orchestration.kaggle_run import run_prepare
+from drowning.orchestration.kaggle_run import run_prepare, package_output, sha256_file
 from drowning.orchestration.run_collector import summarize_report
 from tests.test_kaggle_run import ROOT, make_yolo_export
 
@@ -86,12 +86,15 @@ class TrainServiceTests(unittest.TestCase):
         inputs = self.base / "inputs"
         if not inputs.exists():
             make_yolo_export(inputs / "pool-export")
+        output = self.base / f"prep-{uuid4().hex[:6]}"
         report = run_prepare(sources_dir=self.sources, reviews_dir=self.reviews_dir, input_root=inputs,
-                             output_dir=self.base / f"prep-{uuid4().hex[:6]}", work_dir=self.base / f"work-prep-{uuid4().hex[:6]}",
+                             output_dir=output, work_dir=self.base / f"work-prep-{uuid4().hex[:6]}",
                              code_fingerprint="a" * 64)
         summary = summarize_report(report)
         summary["temporal_window_count_before_split"] = windows
-        return self.insert_job("prepare", "prepare_only", "completed", run_summary=summary)
+        archive = package_output(output, self.base / f"prepare-{uuid4().hex}.zip")
+        return self.insert_job("prepare", "prepare_only", "completed", run_summary=summary,
+                               run_archive=str(archive), run_archive_sha256=sha256_file(archive))
 
     def completed_smoke(self, gpu=True):
         summary = {"run_mode": "remote_smoke", "gpu_confirmed": gpu, "gradients_ok": True, "device": "cuda" if gpu else "cpu"}
@@ -169,6 +172,25 @@ class TrainServiceTests(unittest.TestCase):
         self.assertIn("mapping changed after the last prepare", " ".join(view["modes"]["remote_smoke"]["blocked_by"]))
 
     # -- submission ------------------------------------------------------------------------
+    def test_prepare_carries_verified_source_cache_and_ignores_tampered_archives(self):
+        service = self.service()
+        prior_id = self.completed_prepare()
+        first = service.submit("prepare_only", new_version=False, reason="", idempotency_key="prepare-cached-1")
+        with self.factory() as session:
+            job = session.get(Job, UUID_FROM(first["job"]["id"]))
+            self.assertEqual(job.payload["prepare_cache_source_versions"], 1)
+            kernel_dir = Path(job.payload["kernel_dir"])
+            metadata = json.loads((kernel_dir / "kernel-metadata.json").read_text(encoding="utf-8"))
+            notebook = json.loads((kernel_dir / metadata["code_file"]).read_text(encoding="utf-8"))
+            self.assertEqual(notebook["metadata"]["drowning_project"]["prepare_cache_source_versions"], 1)
+            job.state = "cancelled"
+            archive = Path(session.get(Job, prior_id).payload["run_archive"])
+            session.commit()
+        archive.write_bytes(archive.read_bytes() + b"tampered")
+        second = service.submit("prepare_only", new_version=False, reason="", idempotency_key="prepare-cached-2")
+        with self.factory() as session:
+            self.assertEqual(session.get(Job, UUID_FROM(second["job"]["id"])).payload["prepare_cache_source_versions"], 0)
+
     def test_prepare_submission_writes_a_private_kernel_and_is_idempotent(self):
         service = self.service()
         result = service.submit("prepare_only", new_version=False, reason="", idempotency_key="prepare-request-1")
@@ -184,6 +206,7 @@ class TrainServiceTests(unittest.TestCase):
         notebook = json.loads((kernel_dir / metadata["code_file"]).read_text(encoding="utf-8"))
         self.assertEqual(notebook["metadata"]["drowning_project"]["run_mode_default"], "prepare_only")
         self.assertEqual((job.job_type, job.state), ("prepare", "queued"))
+        self.assertEqual(job.payload["push_timeout_seconds"], 43200)
         dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
         self.assertEqual(dispatcher._validate_job(job, kernel_dir), "owner/drowning-temporal")
 
@@ -252,6 +275,7 @@ class TrainServiceTests(unittest.TestCase):
         with self.factory() as session:
             job = session.get(Job, UUID_FROM(result["job"]["id"]))
         self.assertEqual((job.payload["options"]["branch"], job.payload["preflight"]["temporal_window_count"]), ("image_only", 0))
+        self.assertEqual(job.payload["push_timeout_seconds"], 43200)
         dispatcher = KaggleJobDispatcher(self.factory, FakeKaggle(), worker_id="w")
         self.assertEqual(dispatcher._validate_job(job, Path(job.payload["kernel_dir"])), "owner/drowning-temporal")
 

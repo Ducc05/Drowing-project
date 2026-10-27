@@ -80,6 +80,19 @@ Chưa kiểm chứng với tài khoản thật (cần theo dõi lần chạy đ�
 4. Trang **Đánh giá**: tải model ứng viên về máy, chạy thử video của bạn, đánh dấu đoạn đúng/sai, rồi mới duyệt hoặc từ chối.
 5. Trang **Camera**: Start/Stop với model đã duyệt.
 
+## Chuẩn bị tăng dần theo từng nguồn
+
+Mỗi nguồn prepare thành công được lưu kèm checksum dữ liệu, cấu hình nguồn (bao gồm ánh xạ nhãn và nhóm), recipe, code xử lý và phiên bản thư viện. Lượt prepare sau đưa các snapshot báo cáo đã kiểm chứng từ output cũ vào notebook, rồi đối chiếu checksum của dữ liệu hiện tại trên Kaggle.
+
+- Nguồn mới hoặc có thay đổi: chạy chuyển đổi, audit, phân tích chất lượng và tạo ảnh mẫu.
+- Nguồn không đổi: dùng lại báo cáo và ảnh mẫu, giữ nguyên thông tin đã/chưa duyệt; không chạy lại các bước xử lý trên.
+- Snapshot lỗi, thiếu file, checksum sai hoặc không còn archive đã kiểm chứng trên máy: chuẩn bị lại nguồn đó.
+- Báo cáo cũ chưa có `prepare-cache.json` phải chuẩn bị lại một lần để tạo mốc đối chiếu. Không tự xác nhận dữ liệu cũ chỉ vì tên hoặc số phiên bản trong YAML không đổi.
+
+Web đánh dấu mỗi nguồn là **chuẩn bị mới** hoặc **dùng lại kết quả đã kiểm chứng**. Việc đọc file để đối chiếu checksum vẫn diễn ra; cache này tái sử dụng báo cáo prepare, không kế thừa trọng số model và không thay thế các bước tạo input/split/crop trong lượt train.
+
+Cache được khôi phục từ archive prepare đã tải và kiểm chứng trên máy đang gửi job. Máy chưa có archive sẽ chuẩn bị lại; chưa có cơ chế tự tải cache từ Drive ở bước gửi prepare.
+
 ## Checkpoint dùng chung và kết quả giống hệt nhau giữa nhiều người
 
 PostgreSQL **không chứa file checkpoint** (file `.pt` nặng và bất biến); nó chứa bản ghi trỏ tới file và các mã băm để kiểm chứng. File nằm trên Google Drive.
