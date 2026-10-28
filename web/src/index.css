@@ -1,20 +1,54 @@
 :root {
-  font-family: 'Segoe UI', Aptos, sans-serif;
-  --sans: 'Segoe UI', Aptos, sans-serif;
-  --serif: Georgia, 'Times New Roman', serif;
-  --mono: Consolas, 'Courier New', monospace;
-  color: #30384f;
-  background: #f6f7fb;
+  --sans: 'Be Vietnam Pro', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
+
+  --bg: #0d1219;
+  --surface: #131a23;
+  --surface-2: #19212c;
+  --surface-3: #212b38;
+  --line: #273342;
+  --line-soft: #1d2631;
+  --text: #e4e9f0;
+  --text-2: #a9b4c2;
+  --text-3: #75829a;
+
+  --accent: #5ec8b5;
+  --accent-strong: #7fd8c8;
+  --accent-ink: #062520;
+  --accent-soft: rgba(94, 200, 181, .12);
+
+  --drowning: #ef4444;
+  --swimming: #10b981;
+  --out-of-water: #3b82f6;
+
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, .12);
+  --warn: #f2b84b;
+  --warn-soft: rgba(242, 184, 75, .12);
+  --bad: #f87171;
+  --bad-soft: rgba(239, 68, 68, .13);
+  --info: #7cb4f5;
+  --info-soft: rgba(96, 165, 250, .12);
+
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  font-optical-sizing: auto;
-  font-weight: 400;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; }
-button { font: inherit; }
-a { color: inherit; }
-:where(a,button,input,select,textarea,[tabindex]):focus-visible { outline: 3px solid #3e8b72; outline-offset: 2px; }
+body { margin: 0; min-width: 320px; min-height: 100vh; overflow-x: hidden; background: var(--bg); }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--accent); }
+p { margin: 0; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+:where(a, button, input, select, textarea, [tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

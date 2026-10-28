@@ -109,11 +109,11 @@ export default function TrainPage() {
 
   const env = pre?.environment
   return <div className="page-stack">
-    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> TRAIN</div><h1>Train model trên Kaggle</h1>
+    <header className="page-head"><div className="eyebrow">Train</div><h1>Train model trên Kaggle</h1>
       <p className="subtitle">Chọn dataset và cấu hình để train ngay trên Kaggle. Chuẩn bị báo cáo dữ liệu và kiểm tra GPU riêng là các công cụ tùy chọn.</p></header>
     <Banner error={action.error} notice={action.notice} />
 
-    <Panel kicker="MÔI TRƯỜNG" title="Điều kiện để chạy Kaggle" subtitle="Chỉ hiển thị đã/chưa cấu hình, không bao giờ hiển thị giá trị bí mật.">
+    <Panel kicker="Môi trường" title="Điều kiện để chạy Kaggle" subtitle="Chỉ hiển thị đã/chưa cấu hình, không bao giờ hiển thị giá trị bí mật.">
       <ul className="checks">
         <Check ok={Boolean(env?.kaggle_cli_installed)} label="Đã cài Kaggle CLI" hint="pip install kaggle" />
         <Check ok={Boolean(env?.kaggle_credentials_present)} label="Có thông tin đăng nhập Kaggle" hint="Tạo token trong Kaggle → Settings → API, lưu vào ~/.kaggle" />
@@ -181,7 +181,7 @@ export default function TrainPage() {
       </Panel>
     })}
 
-    <Panel kicker="TIẾN ĐỘ" title="Job và tiến trình nền" subtitle="Tiến trình nền gửi job lên Kaggle, theo dõi, tải kết quả và khôi phục sau khi bạn tắt/mở lại ứng dụng."
+    <Panel kicker="Tiến độ" title="Job và tiến trình nền" subtitle="Tiến trình nền gửi job lên Kaggle, theo dõi, tải kết quả và khôi phục sau khi bạn tắt/mở lại ứng dụng."
       right={<div className="tag-row"><span className="muted">Cập nhật lúc {updatedAt ? updatedAt.toLocaleTimeString('vi-VN') : '…'} · tự làm mới mỗi 3 giây</span>
         <button className="secondary-button big" disabled={action.busy} onClick={() => void tick()}>Kiểm tra ngay</button></div>}>
       <div className="stat-row">

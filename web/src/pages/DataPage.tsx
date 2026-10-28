@@ -87,7 +87,7 @@ function SourceReview({ source }: { source: SourceRow }) {
   const quality = review?.quality
   const near = quality?.near_duplicates
 
-  return <Panel kicker="DỮ LIỆU NGUỒN" title={source.source_id.replaceAll('_', ' ')}
+  return <Panel kicker="Dữ liệu nguồn" title={source.source_id.replaceAll('_', ' ')}
     subtitle={`${source.format} · v${source.source_version} · ${source.modality}`}
     right={<div className="tag-row">
       <Tag tone={review?.mapping_review === 'approved' ? 'ok' : review?.mapping_review === 'stale' ? 'bad' : 'warn'}>
@@ -216,7 +216,7 @@ export default function DataPage() {
     request<{ sources: SourceRow[] }>('/api/v1/sources').then((r) => setSources(r.sources.filter((s) => s.source_id))).catch((e) => setError(String(e)))
   }, [])
   return <div className="page-stack">
-    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> DỮ LIỆU</div><h1>Duyệt dữ liệu trước khi train</h1>
+    <header className="page-head"><div className="eyebrow">Dữ liệu</div><h1>Duyệt dữ liệu trước khi train</h1>
       <p className="subtitle">Bước này chỉ để XÁC NHẬN và hoàn toàn tùy chọn: bỏ qua thì vẫn chạy được smoke và train, chỉ là nguồn được ghi là "chưa xác nhận". Bạn có thể tự xem, hoặc đưa gói bằng chứng cho AI duyệt theo quy tắc (docs/LUONG_DUYET.md).</p></header>
     <Banner error={error} />
     {sources.length === 0 && !error && <div className="empty-state">Chưa có nguồn dữ liệu trong configs/datasets.</div>}

@@ -3,8 +3,8 @@ import type { ChangeEvent } from 'react'
 import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, when } from '../api'
 import type { JobSummary } from '../api'
 import { Banner, ClassScores, Matrix, Panel, Tag } from '../ui'
-import { labelColor, labelText } from '../overlayData'
-import { VideoAlerts, VideoOverlay } from '../videoOverlay'
+import { labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
+import { AlertBanner, AlertList, AlertTimeline, LabelLegend, VideoOverlay, VideoStats } from '../videoOverlay'
 import type { Detection, Label, VideoSummary } from '../overlayData'
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
@@ -108,7 +108,10 @@ function buildSegments(detections: Detection[]): Record<string, Segment[]> {
 
 function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: string; onChanged: () => void }) {
   const video = useRef<HTMLVideoElement>(null)
+  const markForm = useRef<HTMLDivElement>(null)
   const [playbackMs, setPlaybackMs] = useState(0)
+  const [durationMs, setDurationMs] = useState(0)
+  const [showBoxes, setShowBoxes] = useState(true)
   const [detections, setDetections] = useState<Detection[]>([])
   const [summary, setSummary] = useState<VideoSummary>()
   const [marks, setMarks] = useState<Mark[]>([])
@@ -141,6 +144,9 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   }, [jobId, loadMarks, loadPresence, setActionError])
 
   const segments = useMemo(() => buildSegments(detections), [detections])
+  const alerts = useAlertSegments(detections)
+  const alerting = [...new Set(alerts.filter((s) => playbackMs >= s.start && playbackMs <= s.end + 500).map((s) => s.track_id))]
+  const seek = (ms: number) => { if (video.current) video.current.currentTime = ms / 1000 }
   const samplesByTrack = useMemo(() => {
     const groups: Record<string, Detection[]> = {}
     for (const item of detections) (groups[item.track_id] ??= []).push(item)
@@ -161,7 +167,7 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   }, [samplesByTrack, playbackMs, summary])
   const tracks = Object.keys(segments).sort()
   const current = () => Math.round((video.current?.currentTime ?? 0) * 1000)
-  const duration = Math.max(1, ...Object.values(segments).flat().map((s) => s.end))
+  const duration = Math.max(1, durationMs, ...Object.values(segments).flat().map((s) => s.end))
   const chosenTrack = track || tracks[0] || ''
   const save = () => action.run(async () => {
     await post(`/api/v1/jobs/${jobId}/review-marks`, {
@@ -186,15 +192,34 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
 
   return <div className="review-area">
     <Banner error={action.error} notice={action.notice} />
+    <VideoStats detections={detections} segments={alerts} durationMs={durationMs} summary={summary} />
+    <div className="analysis-layout">
+      <div className="analysis-player">
+        <div className={`video-shell ${alerting.length ? 'alerting' : ''}`}><video ref={video} controls
+          onLoadedMetadata={(event) => setDurationMs(event.currentTarget.duration * 1000 || 0)}
+          onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
+          onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
+          src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} /></div>
+        <AlertBanner tracks={alerting} />
+        <AlertTimeline segments={alerts} durationMs={durationMs} playbackMs={playbackMs} onSeek={seek} />
+        <div className="player-foot">
+          <LabelLegend />
+          {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
+        </div>
+      </div>
+      <aside className="analysis-side">
+        <div className="side-head"><b>Các đoạn cảnh báo</b><span className={`pill ${alerts.length ? 'pill-bad' : 'pill-ok'}`}>{alerts.length}</span></div>
+        <AlertList segments={alerts} playbackMs={playbackMs} onSeek={seek} onPick={(s) => {
+          setTrack(s.track_id); setStart(s.start); setEnd(s.end); seek(s.start)
+          markForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        }} />
+        <p className="fine-print">“Đánh dấu” điền sẵn người và khoảng thời gian vào form bên dưới; bạn tự chọn model đúng hay sai. Nhãn AI và xác nhận của bạn được lưu riêng.</p>
+      </aside>
+    </div>
     <div className="review-layout">
-      <div className="video-shell"><video ref={video} controls
-        onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
-        onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
-        src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
-        <VideoOverlay video={video} detections={detections} summary={summary} /></div>
-      <VideoAlerts detections={detections} playbackMs={playbackMs}
-        onSeek={(ms) => { if (video.current) video.current.currentTime = ms / 1000 }} />
       <div className="timeline-box">
+        <h4 className="block-title">Nhãn theo từng người</h4>
         <p className="muted">Mỗi dòng là một người do tracker gán ID tạm (không phải danh tính đã xác minh). Màu là nhãn model dự đoán; bấm vào một đoạn để chọn khoảng thời gian cần đánh dấu.</p>
         {tracks.length === 0 && <p className="muted">Không có phát hiện nào trong video.</p>}
         {tracks.map((id) => <div className="track-line" key={id}>
@@ -206,14 +231,15 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
         </div>)}
         <div className="legend">{LABELS.map((l) => <span key={l}><i style={{ background: labelColor[l] }} />{labelText[l]}</span>)}<span><i className="hatch" />dự đoán ảnh đơn (khởi động, chưa đủ chuỗi hoặc chưa đủ khung của người đó)</span></div>
       </div>
-    </div>
     <div className="score-panel">
+      <h4 className="block-title">Điểm tại thời điểm đang xem</h4>
       <p className="muted">Điểm ba nhãn tại khung đã xử lý gần nhất, thời điểm {(playbackMs / 1000).toFixed(2)}s. Thang 0–1, chưa phải xác suất đã hiệu chuẩn.</p>
       <div className="table-scroll"><table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>YOLO tìm người</th><th>Điểm ba nhãn</th></tr></thead>
-        <tbody>{scoreRows.map((row) => <tr key={row.track_id}><td>{row.track_id}</td><td>{row.label ?? '—'}</td><td>{scoreText(row.detector_confidence)}</td><td><ClassScores scores={row.class_scores} /></td></tr>)}
+        <tbody>{scoreRows.map((row) => <tr key={row.track_id}><td className="mono">{trackName(row.track_id)}</td><td>{row.label ?? '—'}</td><td>{scoreText(row.detector_confidence)}</td><td><ClassScores scores={row.class_scores} /></td></tr>)}
           {scoreRows.length === 0 && <tr><td colSpan={4} className="muted">Không có detection tại thời điểm này.</td></tr>}</tbody></table></div>
     </div>
-    <div className="mark-form">
+    </div>
+    <div className="mark-form" ref={markForm}>
       <h4>Đánh dấu đoạn video</h4>
       <div className="mark-row">
         <label className="field">Người<select value={chosenTrack} onChange={(e) => setTrack(e.target.value)}>{tracks.map((t) => <option key={t} value={t}>{t}</option>)}</select></label>
@@ -359,10 +385,10 @@ export default function EvaluationPage() {
   }
 
   return <div className="page-stack">
-    <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> ĐÁNH GIÁ</div><h1>Xem model trên ảnh và video thật</h1>
+    <header className="page-head"><div className="eyebrow">Đánh giá</div><h1>Xem model trên ảnh và video thật</h1>
       <p className="subtitle">Model ứng viên không tự trở thành model chính. Thử trên ảnh hoặc video; với video, bạn có thể đánh dấu các đoạn đúng/sai trước khi quyết định duyệt.</p></header>
     <Banner error={action.error} notice={action.notice} />
-    <Panel kicker="MODEL" title="Phiên bản model" subtitle="Số liệu do Kaggle báo trên tập validation; không phải kết quả trên video của bạn."
+    <Panel kicker="Model" title="Phiên bản model" subtitle="Số liệu do Kaggle báo trên tập validation; không phải kết quả trên video của bạn."
       right={<label className="field inline">Tên người duyệt<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Tên của bạn" /></label>}>
       {models.length === 0 ? <div className="empty-state">Chưa có model nào. Hoàn tất bước train ở trang Train để có model ứng viên.</div> : <>
         <div className="model-tabs">{models.map((m) => <button key={m.id} className={`model-tab ${m.id === selected ? 'on' : ''}`} onClick={() => { setSelected(m.id); setJobId('') }}>
@@ -417,10 +443,10 @@ export default function EvaluationPage() {
         </>}
       </>}
     </Panel>
-    {jobId && <Panel kicker={jobModality === 'image' ? 'KẾT QUẢ ẢNH' : 'XEM VÀ ĐÁNH DẤU'} title={`${jobModality === 'image' ? 'Ảnh' : 'Video'} ${jobId.slice(0, 8)}`} subtitle={jobModality === 'image' ? 'Ảnh đã gắn khung và nhãn dự đoán.' : 'Đánh dấu là nhận định của bạn về những đoạn video; không phải benchmark.'}>
+    {jobId && <Panel kicker={jobModality === 'image' ? 'Kết quả ảnh' : 'Xem và đánh dấu'} title={`${jobModality === 'image' ? 'Ảnh' : 'Video'} ${jobId.slice(0, 8)}`} subtitle={jobModality === 'image' ? 'Ảnh đã gắn khung và nhãn dự đoán.' : 'Đánh dấu là nhận định của bạn về những đoạn video; không phải benchmark.'}>
       {jobModality === 'image' ? <ImageReview key={jobId} jobId={jobId} /> : <VideoReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} />}
     </Panel>}
-    {evaluation && evaluation.human_review.segments > 0 && <Panel kicker="TỔNG HỢP" title="Nhận định của bạn về model này" subtitle={evaluation.human_review.caveat}>
+    {evaluation && evaluation.human_review.segments > 0 && <Panel kicker="Tổng hợp" title="Nhận định của bạn về model này" subtitle={evaluation.human_review.caveat}>
       <div className="stat-row">
         <div><b>{evaluation.human_review.correct}</b><span>đoạn đúng</span></div><div><b>{evaluation.human_review.wrong}</b><span>đoạn sai</span></div>
         <div><b>{(evaluation.human_review.total_reviewed_ms / 1000).toFixed(0)}s</b><span>tổng thời lượng đã xem</span></div>
@@ -430,7 +456,7 @@ export default function EvaluationPage() {
         rows={LABELS.map((e) => LABELS.map((p) => evaluation.human_review.confusion_expected_by_predicted[e][p]))} />
       <p className="muted">Recall theo lớp (trên các đoạn đã đánh dấu): {LABELS.map((l) => `${labelText[l]} ${pct(evaluation.human_review.per_class[l].recall)} (${evaluation.human_review.per_class[l].reviewed_segments} đoạn)`).join(' · ')}</p>
     </Panel>}
-    {model && model.status === 'candidate' && <Panel kicker="QUYẾT ĐỊNH" title="Duyệt hoặc từ chối model ứng viên" subtitle="Chỉ duyệt khi bạn đã xem model trên video thật. Từ chối không xóa phiên bản.">
+    {model && model.status === 'candidate' && <Panel kicker="Quyết định" title="Duyệt hoặc từ chối model ứng viên" subtitle="Chỉ duyệt khi bạn đã xem model trên video thật. Từ chối không xóa phiên bản.">
       <div className="toolbar">
         <button className="primary-button" disabled={!reviewer.trim() || action.busy} onClick={() => void review('approve')}>Duyệt làm model chính</button>
         <button className="secondary-button big" disabled={!reviewer.trim() || action.busy} onClick={() => void review('reject')}>Từ chối</button>

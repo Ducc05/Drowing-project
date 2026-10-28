@@ -346,3 +346,20 @@ Direction from the user: training data comes from labeled datasets they find; th
 - UI places Train now first and labels prepare/smoke as optional diagnostics. Updated SETUP.md and the exported training guide. Existing incremental prepare cache remains available when the user chooses diagnostics.
 - Validation: 81 related tests passed (direct HTTP submission without previous diagnostics, stale reports, dispatcher validation, verified candidate identity resolution, GPU failure before preprocessing, training input blockers, continuation, cache and collection). Web production build passed. Live API restarted and confirmed direct_train=true, requires_prepare=false, requires_smoke=false and train allowed despite stale dataset_test_1 prepare. Updated Train-now UI asset is served.
 - No real cloud training job was submitted by this workflow change. Evidence: reports/direct-training-workflow.json.
+
+
+## 2026-10-28 - Video result cache conflict verified (diagnosis only)
+
+- Implementation: no server, UI, environment or database changes. Confirmed result_file rejects stored result directories outside the configured output cache, and the HTTP route maps this to 409.
+- Tests run: existing synthetic test tests.test_media_api.MediaApiTests.test_result_pointer_cannot_escape_result_cache passed (1 test); no training performed.
+- Live checks: local API returned 33 jobs, including 7 video jobs. All 4 completed video jobs returned 409 with "Stored result path is outside the configured result cache" for each advertised result (8 requests); 3 queued video jobs had no results. Affected IDs: 67171301-2dd9-48f7-bee1-951beebb5b7a, a5c217ad-1e0a-4eb3-9489-0bf1988dda75, 6edc8e3c-1bd1-4e2f-94ab-1f60536addc1, afdeb25f-2b59-4aa4-87ef-6f15eb44c19e. The second job exposes source and detections, both failing.
+- Limitations: direct read-only database connection failed with OperationalError, so exact historical stored paths and file existence were not independently verified. No cloud training checks performed.
+- User acceptance: user requested verification only; repair and playback acceptance remain outstanding.
+
+
+## 2026-10-28 - UI refresh prepared for user-requested commit and push
+
+- Implementation: refreshed Vietnamese navigation and page styling, inline icons, camera presentation, and video evaluation overlays, alert timeline and statistics. Commit scope is web source plus this status log.
+- Tests run: web npm run build passed; npm run lint exited successfully with four react(set-state-in-effect) warnings.
+- Real-data/cloud checks: no training or cloud validation performed for this UI milestone. Previously verified video-result HTTP 409 remains unresolved; successful build does not establish playback acceptance.
+- User acceptance: user authorized committing and pushing the UI on the current branch; browser acceptance has not been recorded.
