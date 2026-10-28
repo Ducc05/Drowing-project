@@ -1,8 +1,10 @@
 import { useCallback, useState } from 'react'
 import { api, newKey, post, request, scoreText, useAction, usePolling } from '../api'
 import { Banner, ClassScores, Panel, Tag } from '../ui'
+import { useAlarmSound } from '../overlayData'
+import { AlertBanner } from '../videoOverlay'
 
-type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; class_scores?: number[] | null; bbox_xyxy: number[] }
+type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; class_scores?: number[] | null; bbox_xyxy: number[]; alert?: boolean }
 type Status = {
   active: boolean; job_id?: string; source?: string; state?: string; error?: string | null; width?: number; height?: number
   frames_read?: number; frames_processed?: number; frames_dropped?: number; processed_fps?: number | null
@@ -13,7 +15,8 @@ type Readiness = { ready_for_request: boolean; reason?: string; model_version?: 
 
 const labelText: Record<string, string> = { drowning: 'drowning', swimming: 'swimming', out_of_water: 'out_of_water' }
 const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
-  image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)' }
+  image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)',
+  h20saver_tracked: 'H20Saver gộp theo ID', h20saver_frame: 'H20Saver (chưa đủ khung)' }
 
 export default function CameraPage() {
   const [source, setSource] = useState('0')
@@ -39,8 +42,11 @@ export default function CameraPage() {
   const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera') }); await load(); return 'Camera đã chạy. Ô compute chung đang được giữ.' })
   const stop = () => action.run(async () => { await post('/api/v1/camera/stop'); await load(); return 'Đã dừng camera và xác nhận các luồng xử lý đã thoát.' })
 
+  const [sound, setSound] = useState(true)
   const active = status.active
   const summary = active ? status : status.last_session
+  const alerted = active ? (status.records ?? []).filter((r) => r.alert).map((r) => r.track_id) : []
+  useAlarmSound(sound && alerted.length > 0)
   return <div className="page-stack">
     <header className="page-head"><div className="eyebrow"><span className="eyebrow-line" /> CAMERA</div><h1>Nhận diện từ camera trực tiếp</h1>
       <p className="subtitle">Webcam Windows (số 0–15) hoặc URL luồng http/https/rtsp/rtmp do bạn nhập. Chỉ dùng model đã duyệt; một lúc chỉ một tác vụ compute trên toàn hệ thống.</p></header>
@@ -59,7 +65,9 @@ export default function CameraPage() {
     </Panel>
 
     {active && <Panel kicker="TRỰC TIẾP" title="Luồng xử lý" subtitle={`${status.source} · ${status.width}×${status.height}`}
-      right={<Tag tone={status.state === 'running' ? 'ok' : 'warn'}>{status.state}</Tag>}>
+      right={<div className="toolbar"><label className="check-inline"><input type="checkbox" checked={sound} onChange={(e) => setSound(e.target.checked)} /> Âm báo</label>
+        <Tag tone={status.state === 'running' ? 'ok' : 'warn'}>{status.state}</Tag></div>}>
+      <AlertBanner tracks={alerted} />
       <div className="camera-layout">
         <img className="camera-view" key={status.job_id} src={api('/api/v1/camera/stream')} alt="Luồng camera đã gắn khung và nhãn" />
         <div className="camera-side">
@@ -71,10 +79,11 @@ export default function CameraPage() {
           </div>
           <p className="muted">Tracker: {status.tracker}. ID là ID tạm của tracker, không phải danh tính đã xác minh. Nếu model chậm hơn camera, khung cũ bị bỏ để không tích trễ.</p>
           <p className="muted">Ba điểm nhãn có thang 0–1 và chưa được hiệu chuẩn. Điểm YOLO tìm người tách riêng với điểm phân loại.</p>
-          <div className="table-scroll"><table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>Nhánh</th><th>YOLO tìm người</th><th>Điểm ba nhãn</th></tr></thead>
-            <tbody>{(status.records ?? []).map((r) => <tr key={r.track_id}><td>{r.track_id.replace('trk-', '#')}</td><td>{r.label ? labelText[r.label] ?? r.label : '—'}</td>
+          <div className="table-scroll"><table className="data-table"><thead><tr><th>ID</th><th>Nhãn</th><th>Cảnh báo</th><th>Nhánh</th><th>YOLO tìm người</th><th>Điểm ba nhãn</th></tr></thead>
+            <tbody>{(status.records ?? []).map((r) => <tr key={r.track_id} className={r.alert ? 'row-alert' : undefined}><td>{r.track_id.replace('trk-', '#')}</td><td>{r.label ? labelText[r.label] ?? r.label : '—'}</td>
+              <td>{r.alert ? <Tag tone="bad">ĐUỐI NƯỚC</Tag> : '—'}</td>
               <td>{branchText[r.prediction_branch] ?? r.prediction_branch}</td><td>{scoreText(r.detector_confidence)}</td><td><ClassScores scores={r.class_scores} /></td></tr>)}
-              {(status.records ?? []).length === 0 && <tr><td colSpan={5} className="muted">Chưa phát hiện người nào trong khung hình hiện tại.</td></tr>}</tbody></table></div>
+              {(status.records ?? []).length === 0 && <tr><td colSpan={6} className="muted">Chưa phát hiện người nào trong khung hình hiện tại.</td></tr>}</tbody></table></div>
         </div>
       </div>
     </Panel>}

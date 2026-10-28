@@ -25,7 +25,7 @@ from drowning.api.train import MODES, TrainBlocked, TrainService
 from drowning.data.review import ReviewError
 from drowning.installation import installation_id
 from drowning.orchestration.supervisor import JobSupervisor
-from drowning.api.inference import InferenceUnavailable, get_approved_model
+from drowning.api.inference import InferenceUnavailable, get_approved_model, runtime_weights_missing
 from drowning.inference.camera import (STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
                                         CameraStopUnconfirmed)
 from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
@@ -335,12 +335,12 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         try:
             model, _, _ = get_approved_model(session, request.app.state.settings)
             if request.app.state.inference_factory is None:
-                weights = request.app.state.settings.person_detector_weights_path
-                if not weights or not Path(weights).is_file():
-                    raise InferenceUnavailable("PERSON_DETECTOR_WEIGHTS is missing")
+                missing = runtime_weights_missing(request.app.state.settings, model)
+                if missing:
+                    raise InferenceUnavailable(missing)
             return {"ready_for_request": True, "model_version_id": str(model.id),
                     "model_version": model.display_version, "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES,
-                    "model_loaded": False}
+                    "model_loaded": False, "detection_engine": request.app.state.settings.detection_engine}
         except InferenceUnavailable as exc:
             return {"ready_for_request": False, "reason": str(exc),
                     "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES, "model_loaded": False}

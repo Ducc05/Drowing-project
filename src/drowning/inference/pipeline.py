@@ -154,9 +154,13 @@ class PersonStateInference:
         import cv2
 
         annotated = bgr.copy()
+        alerted = [record["track_id"] for record in records if record.get("alert")]
         for record in records:
             x1, y1, x2, y2 = (int(value) for value in record["bbox_xyxy"])
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (101, 207, 184), 2)
+            if record.get("alert"):
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (40, 40, 230), 4)
+            else:
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (101, 207, 184), 2)
             scores = record.get("class_scores")
             label_index = CLASS_KEYS.index(record["label"]) if record.get("label") in CLASS_KEYS else -1
             confidence = scores[label_index] if scores and 0 <= label_index < len(scores) else None
@@ -182,6 +186,14 @@ class PersonStateInference:
                 cv2.rectangle(annotated, (tx, ty - height - 3), (min(annotated.shape[1], tx + width + 4), ty + baseline), (22, 30, 38), -1)
                 cv2.putText(annotated, line, (tx + 2, ty), cv2.FONT_HERSHEY_SIMPLEX,
                             scale, (255, 255, 255), 1, cv2.LINE_AA)
+        if alerted:
+            # Same wording as the web alert banner; IDs are provisional tracker IDs.
+            who = ", ".join(track_id.replace("trk-", "#") for track_id in alerted[:3])
+            if len(alerted) > 3:
+                who += f" +{len(alerted) - 3}"
+            cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 30), (40, 40, 200), -1)
+            cv2.putText(annotated, f"DROWNING ALERT: {who}", (10, 21), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (255, 255, 255), 2, cv2.LINE_AA)
         return annotated
 
     @torch.inference_mode()

@@ -58,6 +58,8 @@ The image/video form requires an approved registry model, its verified local cac
 
 Synchronization downloads the exact approved Drive archive, checks size/SHA-256/bundle identity, and installs a UUID cache directory atomically. It preserves earlier versions and never trains. Configure `APPROVED_MODEL_BUNDLE_DIR`, Drive OAuth, and `PERSON_DETECTOR_WEIGHTS` locally. No trained model is currently available.
 
+Alternatively, set `DETECTION_ENGINE=h20saver` and `H20SAVER_WEIGHTS` to use the external [H20Saver](https://github.com/esonhjz/H20Saver) YOLO11x weights for recognition (person detection and the drowning/swimming/out-of-water label in one model) without a registry model; tracking, alerts and the web UI stay in this project. See `docs/SETUP.md` (section "Engine nhận diện H20Saver").
+
 Upload endpoints `POST /api/v1/test/image` and `/video` accept multipart `file` and an `Idempotency-Key` header. Retry the same file/key after slot contention or an uncertain response. They return a durable job ID and local annotated media/detections links. When Drive is absent or fails, state is `sync_pending`; local results remain usable. `POST /api/v1/jobs/{id}/sync-results` only retries result upload. Offline video output is VP8/WebM; browser playback remains unverified. Camera is not implemented.
 
 After configuring PostgreSQL, Kaggle CLI authentication and `KAGGLE_KERNEL_REF`, materialize a private kernel folder and explicitly dispatch a queued job:

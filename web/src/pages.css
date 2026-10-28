@@ -157,3 +157,17 @@ table.data-table { max-width: 100%; }
 
 .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #52b99e; animation: live-pulse 1.4s ease-in-out infinite; }
 @keyframes live-pulse { 0%, 100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.15); } }
+
+/* Drowning alerts (camera, video results) */
+.alert-banner { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 11px 14px; border-radius: 8px; background: #d92d2d; color: #fff; font-weight: 700; font-size: 14px; letter-spacing: .02em; animation: alert-flash 1s ease-in-out infinite; }
+.alert-dot { width: 10px; height: 10px; border-radius: 50%; background: #fff; flex: none; }
+@keyframes alert-flash { 0%, 100% { background: #d92d2d; } 50% { background: #a81e1e; } }
+@media (prefers-reduced-motion: reduce) { .alert-banner { animation: none; } }
+.video-alerts { margin-top: 10px; }
+.alert-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+.alert-chip { border: 1px solid #f2d5d0; background: #fff0ee; color: #8d4847; border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.alert-chip:hover { background: #fde2dd; }
+.row-alert td { background: #fff0ee; }
+.check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.result-video { min-width: 0; }
+.result-video video { width: 100%; max-height: 340px; border-radius: 8px; background: #172238; }

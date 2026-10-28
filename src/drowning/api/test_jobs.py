@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from drowning.api.inference import (InferenceCancelled, get_approved_model, load_approved_pipeline,
-                                    run_image_test, run_video_test)
+                                    run_image_test, run_video_test, runtime_weights_missing)
 from drowning.api.media import persist_upload, safe_local_root
 from drowning.config import Settings
 from drowning.db.models import Artifact, Job, ModelVersion
@@ -151,10 +151,9 @@ class LocalMediaTestJobs:
                 explicit = bool(existing.payload.get("evaluation")) if existing else model_version_id is not None
                 model_record, _, _ = get_approved_model(session, self.settings, pinned_model_id=pinned,
                                                         allow_candidate=explicit)
-            if self.inference_factory is None and (
-                    not self.settings.person_detector_weights_path
-                    or not Path(self.settings.person_detector_weights_path).is_file()):
-                raise MediaRequestConflict("PERSON_DETECTOR_WEIGHTS is missing; local test cannot start")
+            missing = None if self.inference_factory is not None else runtime_weights_missing(self.settings, model_record)
+            if missing:
+                raise MediaRequestConflict(f"{missing}; local test cannot start")
             with self.factory() as session:
                 job, created = create_job(session, job_type="inference", idempotency_key=idempotency_key,
                                           payload={"executor": "local", "modality": modality,

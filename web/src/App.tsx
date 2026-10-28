@@ -6,6 +6,7 @@ import CameraPage from './pages/CameraPage'
 import DataPage from './pages/DataPage'
 import EvaluationPage from './pages/EvaluationPage'
 import TrainPage from './pages/TrainPage'
+import { ResultVideo } from './videoOverlay'
 
 type Route = 'overview' | 'data' | 'train' | 'evaluation' | 'camera'
 const ROUTES: Route[] = ['overview', 'data', 'train', 'evaluation', 'camera']
@@ -241,8 +242,9 @@ function App() {
                 {mediaResult.state === 'sync_pending' && config?.drive_configured && <button className="secondary-button" disabled={syncingResult} onClick={() => void syncResults()}>{syncingResult ? 'Đang đồng bộ…' : 'Đồng bộ lại Drive'}</button>}
               </div>
             </div>
-            {mediaResult.modality === 'video' && (mediaResult.files.annotated || mediaResult.files.source) &&
-              <video controls src={api(mediaResult.files.annotated ?? mediaResult.files.source)} />}
+            {mediaResult.modality === 'video' && (mediaResult.files.annotated || mediaResult.files.source) && (mediaResult.files.detections
+              ? <ResultVideo jobId={mediaResult.job_id} src={mediaResult.files.annotated ?? mediaResult.files.source} />
+              : <video controls src={api(mediaResult.files.annotated ?? mediaResult.files.source)} />)}
             {mediaResult.modality === 'image' && mediaResult.files.annotated &&
               <img src={api(mediaResult.files.annotated)} alt="Kết quả kiểm tra ảnh với box và nhãn" />}
           </div>}

@@ -87,6 +87,11 @@ class Settings:
     kaggle_dataset_sources: tuple[str, ...] = ()
     supervisor_enabled: bool = True
     supervisor_interval_seconds: int = 30
+    # "classifier" = person detector + approved Kaggle classifier (default);
+    # "h20saver" = the external H20Saver YOLO detector labels drowning/swimming/out_of_water itself.
+    detection_engine: str = "classifier"
+    h20saver_weights_path: str = ""
+    h20saver_confidence: float = 0.25
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "Settings":
@@ -117,6 +122,15 @@ class Settings:
         device = env.get("MODEL_DEVICE", "cpu").strip().lower()
         if device != "cpu" and not device.startswith("cuda"):
             raise ValueError("MODEL_DEVICE must be cpu or a CUDA device")
+        engine = env.get("DETECTION_ENGINE", "classifier").strip().lower() or "classifier"
+        if engine not in {"classifier", "h20saver"}:
+            raise ValueError("DETECTION_ENGINE must be classifier or h20saver")
+        try:
+            h20saver_confidence = float(env.get("H20SAVER_CONFIDENCE", "0.25"))
+        except ValueError as exc:
+            raise ValueError("H20SAVER_CONFIDENCE must be a number") from exc
+        if not 0 <= h20saver_confidence <= 1:
+            raise ValueError("H20SAVER_CONFIDENCE must be between 0 and 1")
         return cls(
             app_env=env.get("APP_ENV", "development"),
             api_host=env.get("API_HOST", "127.0.0.1"),
@@ -144,6 +158,9 @@ class Settings:
             kaggle_dataset_sources=_dataset_sources(env.get("KAGGLE_DATASET_SOURCES", "")),
             supervisor_enabled=env.get("SUPERVISOR_ENABLED", "true").strip().lower() != "false",
             supervisor_interval_seconds=_positive_int(env.get("SUPERVISOR_INTERVAL_SECONDS", "30"), "SUPERVISOR_INTERVAL_SECONDS"),
+            detection_engine=engine,
+            h20saver_weights_path=env.get("H20SAVER_WEIGHTS", "").strip(),
+            h20saver_confidence=h20saver_confidence,
         )
 
     def status(self) -> dict[str, object]:
@@ -162,6 +179,8 @@ class Settings:
             "model_bundle_configured": self.model_bundle_configured,
             "model_bundle_manifest_present": self.model_bundle_manifest_present,
             "person_detector_configured": self.detector_weights_configured,
+            "detection_engine": self.detection_engine,
+            "h20saver_weights_configured": bool(self.h20saver_weights_path),
             "kaggle_datasets_configured": bool(self.kaggle_dataset_sources),
             "supervisor_enabled": self.supervisor_enabled,
         }

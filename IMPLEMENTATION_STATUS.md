@@ -1,8 +1,15 @@
 # Implementation status
 
-Last updated: 2026-10-26
+Last updated: 2026-10-28
 
 This status separates code written, checks actually run, and work not verified. It does not claim cloud, model, or user acceptance based on local tests.
+
+## H20Saver recognition engine and web alerts — 2026-10-28
+
+- **Implemented:** optional `DETECTION_ENGINE=h20saver` (`H20SAVER_WEIGHTS`, `H20SAVER_CONFIDENCE`). `inference/h20saver.py` loads the external H20Saver YOLO11x checkpoint, maps its exact class names (`drowning`, `swimming`, `out of water`) to ontology v1 and refuses any other class list. It replaces the person detector *and* the classifier; this project's `ByteTracker` and `TrackAggregator` (EMA tau 1 s, enter 0.50 held 1.5 s, exit 0.30, unbenchmarked starting values) still decide per-track alerts. The engine has no registry record: `get_approved_model` returns an identity pinned by the weights' SHA-256 (`h20saver-<sha12>`, UUIDv5), so jobs pin the exact weights; a pinned registry model (candidate evaluation, training continuation) still resolves through the registry. Default engine remains `classifier`; nothing changes unless `.env` opts in. Alerts are now visible: server-rendered video/MJPEG draws red alert boxes and a banner; Camera shows a flashing banner, an optional repeating beep and an alert column; Overview video results play with the canvas overlay plus a clickable list of alert intervals, also added to the Evaluation video review. `VideoOverlay` moved to `web/src/videoOverlay.tsx` (data helpers in `overlayData.ts`).
+- **Tested:** `tests/test_h20saver.py` — 15 tests (class mapping, BGR input, sustained-vs-single-frame alert, inherited video interface, alert drawing, checksum identity/pinning, registry fallback, settings validation, and an HTTP readiness + image upload flow on temporary SQLite with a fake detector). Full `python -m unittest discover -s tests` (DATABASE_URL empty): **325 tests passed, 1 skipped** (baseline before this change: 310 passed, 1 skipped). `npm run build` passed; `npm run lint` passed with the same four existing `set-state-in-effect` warnings.
+- **Real-weights local check (not a benchmark):** the actual H20Saver `best.pt` ran through `load_h20saver_pipeline` + inherited `infer_video` on a 16 s segment of a Red Cross submerged-victim rescue video on an RTX 3050 (stride 3, 128 processed frames): `render=overlay` took 6.6 s, `render=video` 34.8 s (VP8 encoding). The first alert appeared at 6.5 s into the segment on the submerged victim; a rendered frame showed the red box and banner. One video, no labels: this is not an accuracy, false-alarm or latency claim.
+- **Not verified:** no live API server, browser rendering, camera device or audio playback was exercised with this engine; no labeled-video evaluation of H20Saver or of the alert thresholds; H20Saver weights were not uploaded to Drive or added to the registry/approval flow.
 
 ## Decimal classifier scores — 2026-10-26
 

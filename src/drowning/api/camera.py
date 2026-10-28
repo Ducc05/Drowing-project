@@ -10,7 +10,8 @@ from uuid import UUID
 
 from sqlalchemy.orm import sessionmaker
 
-from drowning.api.inference import InferenceUnavailable, get_approved_model, load_approved_pipeline
+from drowning.api.inference import (InferenceUnavailable, get_approved_model, load_approved_pipeline,
+                                    runtime_weights_missing)
 from drowning.config import Settings
 from drowning.db.models import Job
 from drowning.db.repositories import (ExecutionSlotBusy, StaleExecutionOwner, claim_execution_slot, create_job,
@@ -90,9 +91,9 @@ class CameraService:
                 raise CameraBusy(self._job_id, "A camera session is already active on this installation")
             with self.factory() as session:
                 model_record, _, _ = get_approved_model(session, self.settings)
-            if self.inference_factory is None and not (
-                    self.settings.person_detector_weights_path and Path(self.settings.person_detector_weights_path).is_file()):
-                raise InferenceUnavailable("PERSON_DETECTOR_WEIGHTS is missing; camera test cannot start")
+            missing = None if self.inference_factory is not None else runtime_weights_missing(self.settings, model_record)
+            if missing:
+                raise InferenceUnavailable(f"{missing}; camera test cannot start")
             with self.factory() as session:
                 job, created = create_job(session, job_type="inference", idempotency_key=idempotency_key, payload={
                     "executor": "local", "modality": "camera", "source": display,

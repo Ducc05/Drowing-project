@@ -24,6 +24,8 @@ Hệ thống không in giá trị bí mật ra màn hình, log hay báo cáo. Ki
 | `KAGGLE_NOTEBOOK_PRIVATE` | không | để `true`; hệ thống từ chối push notebook công khai |
 | `SUPERVISOR_ENABLED`, `SUPERVISOR_INTERVAL_SECONDS` | không | tiến trình nền theo dõi job; mặc định bật, 30 giây |
 | `PERSON_DETECTOR_WEIGHTS` | chạy thử ảnh/video/camera ở máy | file trọng số detector người (ví dụ YOLO `.pt`) |
+| `DETECTION_ENGINE` | không | `classifier` (mặc định: detector người + model đã duyệt) hoặc `h20saver` (xem mục H20Saver bên dưới) |
+| `H20SAVER_WEIGHTS`, `H20SAVER_CONFIDENCE` | khi `DETECTION_ENGINE=h20saver` | file `best.pt` của H20Saver và ngưỡng box (mặc định 0.25) |
 | `APPROVED_MODEL_BUNDLE_DIR` | chạy thử | nơi lưu model đã tải về (mặc định `./local-cache/models/approved`) |
 | `ALANOUD_V4_DATA_ROOT` (và các `*_DATA_ROOT` khác) | duyệt/convert dữ liệu ở máy này | thư mục dataset gốc, chỉ đọc |
 
@@ -125,3 +127,20 @@ API `POST /api/v1/train/submit` nhận thêm `continue_from_approved` (mặc đ�
 2. Đổi đầu chuỗi thành `postgresql+psycopg://` và giữ `?sslmode=require`. Điền cùng một `DATABASE_URL` vào `.env` của mỗi máy. `TEST_DATABASE_URL` giữ trỏ tới database cục bộ riêng.
 3. Một máy chạy `drownctl db upgrade`; các máy khác chạy `drownctl db check`.
 4. Mỗi người tự cấp Drive cho mình (`drownctl auth drive`) và được chia sẻ cùng thư mục Drive với quyền Editor.
+
+## Engine nhận diện H20Saver (tuỳ chọn)
+
+[H20Saver](https://github.com/esonhjz/H20Saver) là model YOLO11x đã fine-tune với ba lớp `drowning`, `swimming`, `out of water`, cùng thứ tự ontology v1. Khi bật engine này, H20Saver **thay cả detector người lẫn model phân loại**; tracker, cảnh báo và giao diện web vẫn là của dự án này.
+
+1. Tải trọng số: `git clone https://huggingface.co/EsonH/best.pt` (hoặc dùng `models/h20saver/best.pt` trong repo H20Saver).
+2. Điền `.env`:
+   ```
+   DETECTION_ENGINE=h20saver
+   H20SAVER_WEIGHTS=D:\đường\dẫnest.pt
+   MODEL_DEVICE=cuda
+   ```
+3. Khởi động lại API. Tổng quan, Camera và `/api/v1/test/readiness` sẽ hiện `h20saver-<12 ký tự SHA-256>`; job được ghim theo checksum của file trọng số (thay file = phiên bản model khác).
+
+Cách cảnh báo hoạt động: mỗi box của H20Saver chỉ cho lớp thắng và độ tin cậy sau NMS (không phải xác suất ba lớp). Độ tin cậy đó được gộp theo ID tracker bằng `TrackAggregator` (EMA ~1 giây); cảnh báo bật khi điểm `drowning` giữ ≥ 0.50 trong 1.5 giây và tắt khi xuống dưới 0.30. Đây là giá trị khởi đầu **chưa được đánh giá** trên video có nhãn.
+
+Engine này không đi qua luồng duyệt model Kaggle/Drive: nó không có bản ghi trong registry. Trang Đánh giá vẫn chạy model registry khi bạn chọn một candidate cụ thể. Đặt lại `DETECTION_ENGINE=classifier` để quay về luồng cũ.

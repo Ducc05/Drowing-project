@@ -22,9 +22,45 @@ class InferenceCancelled(RuntimeError):
     pass
 
 
+def _h20saver_model(settings: Settings, pinned_model_id: UUID | None):
+    """With DETECTION_ENGINE=h20saver, the default model is the H20Saver weights (pinned by checksum).
+
+    Returns ``None`` when a different registry model is pinned, so evaluation of Kaggle candidates still works.
+    """
+    if settings.detection_engine != "h20saver":
+        return None
+    weights = Path(settings.h20saver_weights_path).expanduser() if settings.h20saver_weights_path else None
+    if weights is None or not weights.is_file():
+        if pinned_model_id is not None:
+            return None  # a pinned registry model does not depend on the H20Saver weights
+        if weights is None:
+            raise InferenceUnavailable("DETECTION_ENGINE=h20saver but H20SAVER_WEIGHTS is not configured")
+        raise InferenceUnavailable("H20SAVER_WEIGHTS file is missing")
+    from drowning.inference.h20saver import h20saver_identity
+
+    identity = h20saver_identity(weights)
+    if pinned_model_id is not None and pinned_model_id != identity.id:
+        return None
+    return identity, weights
+
+
+def runtime_weights_missing(settings: Settings, model_record: Any) -> str | None:
+    """Reason local inference cannot start for this model, or ``None`` when its weights are present."""
+    if getattr(model_record, "model_kind", None) == "h20saver":
+        return None  # checked (and checksummed) when the model was resolved
+    weights = settings.person_detector_weights_path
+    if not weights or not Path(weights).is_file():
+        return "PERSON_DETECTOR_WEIGHTS is missing"
+    return None
+
+
 def get_approved_model(session: Session, settings: Settings, *, pinned_model_id: UUID | None = None,
-                       allow_candidate: bool = False) -> tuple[ModelVersion, Path, dict[str, Any]]:
+                       allow_candidate: bool = False) -> tuple[Any, Path, dict[str, Any]]:
     """Resolve the approved model, or an explicitly pinned version (a candidate only for evaluation)."""
+    external = _h20saver_model(settings, pinned_model_id)
+    if external is not None:
+        identity, weights = external
+        return identity, weights.parent, {"model_kind": "h20saver", "weights_sha256": identity.weights_sha256}
     if pinned_model_id is None:
         registry = session.get(ModelRegistry, settings.model_family)
         if registry is None or registry.approved_model_id is None:
@@ -70,6 +106,18 @@ def load_approved_pipeline(session: Session, settings: Settings, *,
                                                             allow_candidate=allow_candidate)
     if inference_factory is not None:
         return inference_factory(model_record, manifest, bundle_dir), model_record
+    if model_record.model_kind == "h20saver":
+        try:
+            from drowning.inference.h20saver import load_h20saver_pipeline
+
+            pipeline, _ = load_h20saver_pipeline(Path(settings.h20saver_weights_path).expanduser(),
+                                                 confidence=settings.h20saver_confidence,
+                                                 device=settings.model_device)
+            return pipeline, model_record
+        except ImportError as exc:
+            raise InferenceUnavailable("Install vision and detector dependencies before H20Saver inference") from exc
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise InferenceUnavailable(f"Unable to load the H20Saver weights ({type(exc).__name__})") from exc
     if not settings.detector_weights_configured:
         raise InferenceUnavailable("PERSON_DETECTOR_WEIGHTS is not configured")
     try:
