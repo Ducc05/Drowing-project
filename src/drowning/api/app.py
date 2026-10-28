@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from drowning.config import Settings, load_env_file
 from drowning.data.adapters import scan_source
 from drowning.api.camera import CameraBusy, CameraNotRunning, CameraService
-from drowning.api.evaluation import MarkError, ReviewMarks, model_evaluation
+from drowning.api.evaluation import MarkError, ReviewMarks, imported_model_evaluation, model_evaluation
 from drowning.api.review import ReviewConflict, SourceReviewService
 from drowning.api.train import MODES, TrainBlocked, TrainService
 from drowning.data.review import ReviewError
@@ -32,7 +32,7 @@ from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
 from drowning.api.test_jobs import (LocalInferenceCancelled, LocalInferenceFailed, LocalMediaTestJobs,
                                     MediaRequestConflict, MediaSlotBusy)
 from drowning.data.registry import SourceConfigError, inspect_source, load_source, resolve_source_root, validate_source
-from drowning.db.models import Artifact, Job, JobEvent, ModelVersion
+from drowning.db.models import Artifact, Job, JobEvent, ModelRegistry, ModelVersion
 from drowning.db.repositories import (StaleExecutionOwner, ModelReviewError,
                                       create_job, review_model_version)
 from drowning.db.session import check_db, create_db_engine
@@ -539,6 +539,20 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Result synchronization remains pending ({type(exc).__name__})")
 
+    @app.get("/api/v1/test/jobs/{job_id}/preview")
+    def video_preview(job_id: UUID, request: Request):
+        from fastapi.responses import Response
+        # An in-memory frame needs no schema/readiness round trip on every refresh.
+        service = request.app.state.media_jobs
+        if service is None:
+            raise HTTPException(status_code=503, detail="Media service is not configured")
+        try:
+            jpeg = service.preview(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Video job not found")
+        return Response(content=jpeg, status_code=200 if jpeg is not None else 204,
+                        media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
     @app.post("/api/v1/test/jobs/{job_id}/stop")
     def stop_local_test(job_id: UUID, service: LocalMediaTestJobs = Depends(get_media_jobs)):
         try:
@@ -573,13 +587,39 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     def list_models(request: Request, session: Session = Depends(get_session)):
         models = session.scalars(select(ModelVersion).order_by(ModelVersion.created_at.desc()).limit(100)).all()
         cache = Path(request.app.state.settings.approved_model_bundle_dir).expanduser() if request.app.state.settings.approved_model_bundle_dir else None
-        return {"models": [{"id": str(model.id), "model_family": model.model_family,
-                            "display_version": model.display_version, "status": model.status,
-                            "temporal_trained": model.temporal_trained, "model_kind": model.model_kind, "completion_kind": model.completion_kind,
-                            "dataset_fingerprint": model.dataset_fingerprint, "metrics": model.metrics or {},
-                            "checkpoint": checkpoint_info(session, model),
-                            "cached_locally": bool(cache and (cache / str(model.id) / "manifest.json").is_file()),
-                            "created_at": model.created_at.isoformat()} for model in models]}
+        hidden_model_id = None
+        visible: list[dict[str, Any]] = []
+        settings = request.app.state.settings
+        if settings.detection_engine == "h20saver" and settings.h20saver_weights_path:
+            from datetime import datetime, timezone
+            from drowning.inference.h20saver import h20saver_identity
+            weights = Path(settings.h20saver_weights_path).expanduser().resolve()
+            if weights.is_file():
+                identity = h20saver_identity(weights)
+                registry = session.get(ModelRegistry, settings.model_family)
+                hidden_model_id = registry.approved_model_id if registry is not None else None
+                visible.append({"id": str(identity.id), "model_family": "H20Saver YOLO11x",
+                                "display_version": "best.pt", "status": "active",
+                                "temporal_trained": False, "model_kind": "h20saver",
+                                "completion_kind": "imported_weights", "dataset_fingerprint": None,
+                                "metrics": {}, "source": "imported_h20saver",
+                                "checkpoint": {"storage": "local", "drive_file_id": None, "drive_url": None,
+                                               "archive_sha256": identity.weights_sha256,
+                                               "weights_sha256": identity.weights_sha256,
+                                               "size_bytes": weights.stat().st_size, "status": "ready",
+                                               "note": "Imported H20Saver weights; no Kaggle training run is attributed."},
+                                "cached_locally": True,
+                                "created_at": datetime.fromtimestamp(weights.stat().st_mtime, timezone.utc).isoformat()})
+        visible.extend({"id": str(model.id), "model_family": model.model_family,
+                        "display_version": model.display_version, "status": model.status,
+                        "temporal_trained": model.temporal_trained, "model_kind": model.model_kind,
+                        "completion_kind": model.completion_kind,
+                        "dataset_fingerprint": model.dataset_fingerprint, "metrics": model.metrics or {},
+                        "source": "kaggle_registry", "checkpoint": checkpoint_info(session, model),
+                        "cached_locally": bool(cache and (cache / str(model.id) / "manifest.json").is_file()),
+                        "created_at": model.created_at.isoformat()}
+                       for model in models if model.id != hidden_model_id)
+        return {"models": visible}
 
     @app.post("/api/v1/models/{model_version_id}/sync")
     def sync_model(model_version_id: UUID, request: Request, session: Session = Depends(get_session)):
@@ -598,6 +638,12 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
 
     @app.get("/api/v1/models/{model_version_id}/evaluation")
     def evaluation(model_version_id: UUID, request: Request, session: Session = Depends(get_session)):
+        settings = request.app.state.settings
+        if settings.detection_engine == "h20saver" and settings.h20saver_weights_path:
+            from drowning.inference.h20saver import h20saver_identity
+            weights = Path(settings.h20saver_weights_path).expanduser().resolve()
+            if weights.is_file() and h20saver_identity(weights).id == model_version_id:
+                return imported_model_evaluation(request.app.state.session_factory, model_version_id, "best.pt")
         try:
             return model_evaluation(request.app.state.session_factory, model_version_id)
         except KeyError:

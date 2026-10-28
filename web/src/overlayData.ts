@@ -27,7 +27,8 @@ export function coveredMs(intervals: Array<{ start: number; end: number }>) {
 
 export const trackName = (trackId: string) => trackId.replace('trk-', '#')
 
-export type Detection = { track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number; alert?: boolean }
+export type Detection = {
+  label_mode?: "alarm" | "all"; track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number; alert?: boolean }
 export type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video' }
 /** ``peak`` is the highest drowning score seen inside the interval (0–1, uncalibrated). */
 export type AlertSegment = { track_id: string; start: number; end: number; peak: number | null }
@@ -50,8 +51,8 @@ export function alertSegments(detections: Detection[], maxGapMs = 1500): AlertSe
   return [...done, ...open.values()].sort((a, b) => a.start - b.start)
 }
 
-export function useAlertSegments(detections: Detection[]) {
-  return useMemo(() => alertSegments(detections), [detections])
+export function useAlertSegments(detections: Detection[], intervals?: AlertSegment[]) {
+  return useMemo(() => intervals ?? alertSegments(detections), [detections, intervals])
 }
 
 /** Repeating beep while ``active``; browsers only allow sound after the user has interacted with the page. */

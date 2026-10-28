@@ -363,3 +363,86 @@ Direction from the user: training data comes from labeled datasets they find; th
 - Tests run: web npm run build passed; npm run lint exited successfully with four react(set-state-in-effect) warnings.
 - Real-data/cloud checks: no training or cloud validation performed for this UI milestone. Previously verified video-result HTTP 409 remains unresolved; successful build does not establish playback acceptance.
 - User acceptance: user authorized committing and pushing the UI on the current branch; browser acceptance has not been recorded.
+
+
+## 2026-10-28 - Shared compute slot released at user request
+
+- Operation: identified active local webcam:0 session d593a019-51a4-4f89-acde-bc07b968905a holding compute; stopped it through POST /api/v1/camera/stop, which performs confirmed stop and normal slot release. No implementation changes.
+- Live verification: stop returned state=stopped without error; subsequent camera status active=false and camera job state=completed.
+- Tests/cloud checks: no tests or cloud training run for this operational action. Queued video job 6c6e6401-4510-4e4d-948a-1bca28754465 was not resubmitted; user can retry with the same file and Idempotency-Key.
+- User acceptance: slot release explicitly requested; subsequent video execution not verified.
+
+
+## 2026-10-28 - Light interface theme
+
+- Implementation: switched shared UI tokens to light backgrounds, white panels and dark readable text; updated sidebar, top bar, browser theme color, and status/callout text for light surfaces.
+- Tests run: web production build and git diff --check passed. No new tests for this CSS-only presentation change.
+- Real-data/cloud checks: no inference/training or cloud operations performed.
+- User acceptance: lighter interface requested; visual acceptance pending.
+
+
+## 2026-10-28 - Show configured H20Saver in UI
+
+- Implementation: show external H20Saver default-model card on overview, camera and evaluation using existing config-status and readiness APIs. Overview default model now reflects the configured engine; registry Drive-sync control is hidden for H20Saver. Evaluation links to default-engine testing on overview and explicitly distinguishes its pinned Kaggle models. No registry approval or model-file changes.
+- Tests run: production build and diff whitespace check passed; lint passed with the same four React warnings.
+- Live checks: verified readiness response and updated web asset from local API; no inference, training or model-quality validation performed.
+- User acceptance: requested display implemented; browser visual acceptance pending.
+
+
+## 2026-10-28 - H20Saver label instability diagnosis
+
+- Implementation: diagnosis only; compared read-only H20Saver/src/infer_video.py with local integration. Original uses Ultralytics persistent tracking and windowed drowning votes (2 s, enter 70%, clear below 30%, drowning confidence >=0.5), default alarm-only text. Integration uses separate tracker, EMA-derived labels and default video stride 3.
+- Synthetic check: repeated out_of_water detections at confidence 0.25 become scores [0.375, 0.375, 0.25] through detection_scores; TrackAggregator reports drowning after six frames although every input class was out_of_water. This establishes a label inversion bug in integration, not a measured model failure.
+- Real-data/cloud checks: no real-video comparison, model inference or cloud training performed. Relative contributions to the user's observed jitter remain unmeasured.
+- User acceptance: explanation requested; repair and real-video acceptance outstanding.
+
+
+## 2026-10-29 - H20Saver reference tracking and alarm behavior
+
+- Implementation: replaced custom tracker/EMA label rewriting with Ultralytics persist=True ByteTrack, imgsz=640, direct checkpoint class labels and reference window voting (2 seconds at source FPS; drowning vote requires confidence >=0.5; enter >=70%, clear <30%). H20Saver video inference processes every frame even when the caller requests stride 3; output metadata reports actual stride 1. Image scores now retain only the observed winning-class confidence; zero entries explicitly mean unobserved, not class probabilities.
+- Presentation: new H20Saver records default to alarm-only text; rendered camera/video frames use a dedicated H20Saver renderer. Browser overlay players offer an all-label debug toggle. Previously saved results are unchanged and must be rerun for the new behavior.
+- Runtime: added lap dependency for Ultralytics tracking, installed it in project venv, verified model/tracker/reset on three blank synthetic frames. Restarted the idle API in the project venv; health is alive, readiness reports h20saver-eaa6343ab89d ready, and current UI asset is served. No weights or source repo files changed.
+- Tests run: 53 related unittest tests passed (H20Saver, media API, camera, inference pipeline). Compared monitor against the original repo implementation on 1,200 seeded synthetic frames across five tracks: identical alarm sets. Production web build and diff checks passed; lint has the same four React warnings.
+- Additional fix: cancellation tests exposed a race where the inference thread observed the stop flag before cancellation state was persisted; now the state is saved first. The existing stop/slot-release regression passes.
+- Real-data/cloud checks: no real-video quality or full end-to-end parity evaluation, and no training/cloud run. Local tests use synthetic fixtures only. Live camera retains latest-frame dropping; timing at low processing FPS may differ from offline reference. Monitor retains disappeared-track alarms, but browser overlays derive intervals from visible detection records, so disappearance-only alert display is not fully equivalent to the reference renderer.
+- User acceptance: implementation requested and applied; rerun real videos and user visual acceptance remain outstanding.
+
+
+## 2026-10-29 - Finish H20Saver alert persistence and live timing
+
+- Implementation: persist alarm intervals independently from detection boxes, including the reference grace period after a track disappears; browser playback consumes those intervals and falls back to old detection-derived intervals only for legacy results. Camera status exposes active alarm IDs so sound/banner also retain disappeared-track alarms. No synthetic boxes are created.
+- Live timing: offline videos retain exact reference frame-window votes. Latest-frame cameras use a two-second time-weighted window with the same 70%/30% hysteresis, preventing lower processing FPS from stretching the nominal window; long gaps reset evidence. This is an explicit adaptation for live dropped frames, not a claim of identical frame sequences to offline inference.
+- Tests run: all 56 related tests pass, including synthetic video serialization with disappearing tracks, low-confidence label preservation, variable camera FPS and long-gap reset. Build and diff checks pass; lint retains four existing React warnings.
+- Real-data/cloud checks: no real-data accuracy benchmark or training run. API reload deferred while user video job 761bde6c-8910-4000-a889-6600da85418c is running; this job uses the prior loaded revision.
+- User acceptance: implementation complete; pending runtime reload and user playback acceptance.
+
+- Runtime completion: waited for the user video to finish local inference (sync_pending), then restarted the idle API with the final implementation. Health/readiness succeeded, camera is inactive, and final web asset index-DNTOKdgU.js is served. Verified completed video result endpoints remain accessible after restart and actual frame_stride is 1. Drive synchronization remains pending; no quality claim is made from this existing user run. New jobs use persistent alert intervals and live time-weighted votes.
+
+
+## 2026-10-29 - Live preview while video inference runs
+
+- Implementation: render a bounded JPEG of the latest processed frame with detector labels, boxes, timestamp and alert banner. Encode at most five previews per second, retain only one frame in memory, and clear it at completion/cancellation/failure. Read-only GET /api/v1/test/jobs/{id}/preview returns no-store JPEG or 204 while unavailable; wrong job IDs cannot read another job's frame. Preview requests avoid per-frame schema checks.
+- UI: overview and evaluation automatically show live preview for the submitted Idempotency-Key. Polling is sequential and cancelled on unmount, object URLs are revoked, and terminal jobs stop polling. Overview also exposes a stop button. This shows inference progress, not a second inference run or real-time source playback; preview intentionally displays all raw labels for inspection.
+- Tests run: 56 related tests passed, including preview availability during a blocked synthetic inference, JPEG decoding, job isolation and cleanup after stop; final cleanup/dimension changes passed all 33 media/H20Saver tests. Build and diff checks passed; lint has the same four existing React warnings.
+- Runtime checks: restarted idle API, confirmed health 200, final asset index-BgMdhfmt.js served, and finished-job preview returns 204. No real-media inference or training run was initiated by this change.
+- User acceptance: feature requested and implemented; visual acceptance during a new video run remains pending.
+
+
+## 2026-10-29 - H20Saver weights copied into this repository
+
+- Implementation: copied the user-owned H20Saver `best.pt` into local ignored path `models/h20saver/best.pt`; source file was read only and preserved. Updated ignored `.env` and `.env.example` to use `./models/h20saver/best.pt`, removing runtime dependency on the sibling H20Saver repository.
+- Integrity: source and destination are both 114,396,434 bytes with SHA-256 `eaa6343ab89dec9dbe319c9841958b73da9e0b706bc93d0ab550496931e557d6`. The model remains ignored by Git through `*.pt`; it is present locally, not embedded in source control.
+- Runtime checks: restarted the idle API. Health is alive; config reports `detection_engine=h20saver`; readiness reports `h20saver-eaa6343ab89d` ready. No inference, training, cloud operation or model-quality validation was performed.
+- User acceptance: user explicitly requested a physical local copy rather than an external-path reference; runtime migration is complete, visual/inference acceptance pending.
+
+
+## 2026-10-29 - Present imported best.pt as the active model
+
+- Implementation: removed the standalone H20Saver explanation card. When the H20Saver engine is configured, `/api/v1/models` now exposes the checksum-pinned local `best.pt` as the active imported model and removes the legacy registry-approved Kaggle row from the main list. Rejected/superseded Kaggle versions remain as history. No database row, training record, metrics or review decision was rewritten.
+- Provenance: the active entry is explicitly `source=imported_h20saver`, `model_kind=h20saver`, `completion_kind=imported_weights`; its checkpoint reports the local file size and SHA-256. Evaluation reports no training metrics and states that this project cannot attribute a training run to the imported weights.
+- UI: overview shows `best.pt` as the model in use; the model list labels it `đang dùng` and `H20Saver nhập vào dự án`. Evaluation selects the real H20Saver checksum identity, so media tests run `best.pt`, while metrics and Drive-sync controls intended for Kaggle models are omitted.
+- Tests run: 38 H20Saver/model-sync/media API tests passed; production web build passed; lint has four pre-existing React effect warnings; diff whitespace check passed.
+- Runtime checks: restarted the idle API. Live model list is `best.pt` active, followed by `kaggle-5` rejected and `kaggle-3` superseded; `kaggle-8` is no longer presented as current. The active evaluation endpoint returns empty training metrics with an imported-weights provenance note. Current UI asset is served.
+- Real-data/cloud checks: no inference, model-quality benchmark, training or cloud operation was run. User visual acceptance remains pending.
+
+- UI follow-up: removed imported-source and timestamp metadata from the visible `best.pt` rows on Overview and Evaluation. Technical provenance remains in the API. Production build and diff check passed; lint retains four existing React effect warnings. No backend restart or inference was required.

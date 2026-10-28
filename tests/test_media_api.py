@@ -92,6 +92,8 @@ class BlockingStopPipeline(FakePipeline):
 
     def infer_video(self, source, destination, *, frame_stride=3, render="video", progress=None, should_stop=None):
         from drowning.api.inference import InferenceCancelled
+        from drowning.inference.preview import preview_jpeg
+        self.preview_callback(preview_jpeg(np.zeros((40, 48, 3), dtype=np.uint8), [], 100))
         self.started.set()
         while not should_stop():
             time.sleep(0.01)
@@ -318,6 +320,14 @@ class MediaApiTests(unittest.TestCase):
                 self.assertTrue(await asyncio.to_thread(self.pipeline.started.wait, 10), "video inference did not start")
                 jobs = (await client.get("/api/v1/jobs")).json()["jobs"]
                 job = next(row for row in jobs if row["idempotency_key"] == key)
+                preview = await client.get(f"/api/v1/test/jobs/{job['id']}/preview")
+                self.assertEqual(preview.status_code, 200)
+                self.assertEqual(preview.headers["cache-control"], "no-store")
+                self.assertEqual(preview.headers["content-type"], "image/jpeg")
+                decoded = cv2.imdecode(np.frombuffer(preview.content, dtype=np.uint8), cv2.IMREAD_COLOR)
+                self.assertEqual(decoded.shape[:2], (40, 48))
+                unknown = await client.get("/api/v1/test/jobs/00000000-0000-0000-0000-000000000000/preview")
+                self.assertEqual(unknown.status_code, 404)
                 stopped = await client.post(f"/api/v1/test/jobs/{job['id']}/stop")
                 response = await upload
                 return job["id"], stopped, response

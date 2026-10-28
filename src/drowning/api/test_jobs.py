@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable
 from uuid import UUID
@@ -56,6 +57,8 @@ class LocalMediaTestJobs:
         self.drive_factory = drive_factory
         self._fences: dict[UUID, tuple[str, int]] = {}
         self._stop: set[UUID] = set()
+        self._preview_lock = threading.Lock()
+        self._preview: tuple[UUID, bytes] | None = None
         self.installation = installation_id(Path(settings.input_cache_dir).expanduser().resolve().parent)
 
     def _owned(self, session, job_id):
@@ -93,6 +96,25 @@ class LocalMediaTestJobs:
             release_execution_slot(session, job_id, owner, token,
                                    compute_stopped_confirmed=True)
         self._fences.pop(job_id, None)
+        self._clear_preview(job_id)
+
+    def _clear_preview(self, job_id: UUID) -> None:
+        with self._preview_lock:
+            if self._preview is not None and self._preview[0] == job_id:
+                self._preview = None
+
+    def _publish_preview(self, job_id: UUID, jpeg: bytes) -> None:
+        with self._preview_lock:
+            self._preview = (job_id, jpeg)
+
+    def preview(self, job_id: UUID) -> bytes | None:
+        with self._preview_lock:
+            if self._preview is not None and self._preview[0] == job_id:
+                return self._preview[1]
+        job = self._job(job_id)
+        if job.job_type != "inference" or job.payload.get("modality") != "video":
+            raise KeyError(str(job_id))
+        return None
 
     def _drive(self):
         if self.drive_factory is not None:
@@ -203,6 +225,8 @@ class LocalMediaTestJobs:
                 pipeline, loaded_version = load_approved_pipeline(
                     session, self.settings, pinned_model_id=model_record.id,
                     inference_factory=self.inference_factory, allow_candidate=bool(job.payload.get("evaluation")))
+            if modality == "video":
+                pipeline.preview_callback = lambda jpeg: self._publish_preview(job.id, jpeg)
             self._transition(job.id, JobState.RUNNING, "local_inference", "local_test_started")
             output_root = safe_local_root(self.settings.output_cache_dir)
             output_dir = output_root / "media-tests" / str(job.id) / f"attempt-{token}"
@@ -213,6 +237,7 @@ class LocalMediaTestJobs:
                        else run_video_test(pipeline, source, output_dir, frame_stride=frame_stride,
                                            progress=report_progress,
                                            should_stop=lambda: job.id in self._stop))
+            self._clear_preview(job.id)
             summary = {key: value for key, value in summary.items()
                        if key not in {"video_path", "detections_path"}}
             self._payload(job.id, local_result_dir=str(output_dir), result_files=summary["files"],
@@ -229,6 +254,7 @@ class LocalMediaTestJobs:
                 self._stop.discard(job.id)
             raise LocalInferenceCancelled(job.id)
         except StaleExecutionOwner:
+            self._clear_preview(job.id)
             self._fences.pop(job.id, None)
             self._stop.discard(job.id)
             raise
@@ -237,6 +263,8 @@ class LocalMediaTestJobs:
                              {"error_type": type(exc).__name__})
             self._release(job.id)
             raise LocalInferenceFailed(job.id, type(exc).__name__) from exc
+        finally:
+            self._clear_preview(job.id)
 
         if self.settings.drive_folder_id:
             self._transition(job.id, JobState.SYNCING, "syncing_results", "local_results_drive_sync_started")
@@ -279,10 +307,11 @@ class LocalMediaTestJobs:
         if job.state == JobState.CANCELLED.value:
             return {"job_id": str(job.id), "state": job.state, "message": "Job đã hủy"}
         if job.state == JobState.RUNNING.value:
-            self._stop.add(job_id)
             try:
                 self._transition(job_id, JobState.CANCELLATION_REQUESTED, "cancellation_requested",
                                  "local_test_stop_requested")
+                # Persist cancellation before the inference thread observes the stop flag.
+                self._stop.add(job_id)
             except Exception:
                 current = self._job(job_id)
                 if current.state not in {JobState.COLLECTING.value, JobState.VALIDATING.value, JobState.SYNCING.value,

@@ -229,6 +229,8 @@ class PersonStateInference:
         if fps <= 0:
             capture.release()
             raise ValueError("Input video has no usable FPS metadata")
+        if hasattr(self, "configure_stream"):
+            self.configure_stream(fps)
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if render == "overlay":
@@ -249,6 +251,7 @@ class PersonStateInference:
         total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         started = time.monotonic()
         last_progress = started
+        last_preview = 0.0
         timestamp_fallback_used = False
         try:
             while max_frames is None or frame_index < max_frames:
@@ -270,6 +273,14 @@ class PersonStateInference:
                     image = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
                     records = self.process_frame(image, timestamp, frame_index)
                     detections_json.extend(records)
+                    preview_callback = getattr(self, "preview_callback", None)
+                    if preview_callback is not None and time.monotonic() - last_preview >= 0.2:
+                        from drowning.inference.preview import preview_jpeg
+                        jpeg = preview_jpeg(bgr, records, timestamp,
+                            getattr(self, "active_alert_tracks", []))
+                        if jpeg is not None:
+                            preview_callback(jpeg)
+                        last_preview = time.monotonic()
                     if writer is not None:
                         writer.write(self.draw_annotations(bgr, records))
                     processed_frames += 1
@@ -340,6 +351,8 @@ class PersonStateInference:
             "scores_are_calibrated_probabilities": False,
             "detections": detections_json,
         }
+        if hasattr(self, "result_metadata"):
+            payload.update(self.result_metadata())
         temp_results.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             if writer is not None:

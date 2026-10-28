@@ -12,7 +12,7 @@ type Status = {
   active: boolean; job_id?: string; source?: string; state?: string; error?: string | null; width?: number; height?: number
   frames_read?: number; frames_processed?: number; frames_dropped?: number; processed_fps?: number | null
   latency_ms_p50?: number | null; latency_ms_p95?: number | null; elapsed_seconds?: number; tracker?: string | null
-  records?: Record_[]; last_session?: Status | null
+  alert_track_ids?: string[]; records?: Record_[]; last_session?: Status | null
 }
 type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string }
 
@@ -58,7 +58,7 @@ export default function CameraPage() {
   const summary = active ? status : status.last_session
   const records = active ? status.records ?? [] : []
   const alertRecords = records.filter((r) => r.alert)
-  const alerted = alertRecords.map((r) => r.track_id)
+  const alerted = active ? status.alert_track_ids ?? alertRecords.map((r) => r.track_id) : []
   useAlarmSound(sound && alerted.length > 0)
 
   return <div className="page-stack">

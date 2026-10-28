@@ -109,6 +109,7 @@ class CameraSession:
         self._latest_seq = 0
         self._latest_jpeg: bytes | None = None
         self._latest_records: list[dict[str, Any]] = []
+        self._latest_alert_tracks: list[str] = []
         self._latencies_ms: deque[float] = deque(maxlen=300)
         self._reader: threading.Thread | None = None
         self._worker: threading.Thread | None = None
@@ -132,6 +133,10 @@ class CameraSession:
         self._capture = capture
         self._latest_frame, self._latest_seq, self.frames_read = frame, 1, 1
         self.pipeline.reset_stream()
+        if hasattr(self.pipeline, "configure_live_stream"):
+            import cv2
+            fps = float(capture.get(cv2.CAP_PROP_FPS))
+            self.pipeline.configure_live_stream(fps if 0 < fps < 1000 else 30.0)
         self.started_wall = self.clock()
         self._reader = threading.Thread(target=self._read_loop, name="camera-reader", daemon=True)
         self._worker = threading.Thread(target=self._process_loop, name="camera-worker", daemon=True)
@@ -217,6 +222,8 @@ class CameraSession:
                     self.frames_processed += 1
                     self.detections_total += len(records)
                     self._latest_records = records
+                    self._latest_alert_tracks = list(getattr(self.pipeline, "active_alert_tracks",
+                        [row["track_id"] for row in records if row.get("alert")]))
                     if encoded_ok:
                         self._latest_jpeg = encoded.tobytes()
                     self._latencies_ms.append((self.clock() - began) * 1000)
@@ -248,6 +255,7 @@ class CameraSession:
         with self._lock:
             latencies = sorted(self._latencies_ms)
             frames_processed, detections = self.frames_processed, self.detections_total
+            alert_tracks = list(self._latest_alert_tracks)
         end = self.stopped_wall if self.stopped_wall is not None else self.clock()
         elapsed = max(0.0, end - self.started_wall) if self.started_wall is not None else 0.0
 
@@ -262,7 +270,7 @@ class CameraSession:
                 "latency_ms_p50": percentile(0.5), "latency_ms_p95": percentile(0.95),
                 "tracker": getattr(getattr(self.pipeline, "tracker", None), "name", None),
                 "timestamps": "monotonic_wall_clock_ms",
-                "scores_are_calibrated_probabilities": False}
+                "scores_are_calibrated_probabilities": False, "alert_track_ids": alert_tracks}
 
     status = summary
 

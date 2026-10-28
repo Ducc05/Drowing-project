@@ -1,3 +1,4 @@
+import { LiveVideoPreview } from './LiveVideoPreview'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import './pages.css'
@@ -32,6 +33,8 @@ type ConfigStatus = {
   kaggle_kernel_configured: boolean
   kaggle_private: boolean
   train_executor: string
+  detection_engine?: string
+  h20saver_weights_configured?: boolean
   local_training_enabled: boolean
 }
 
@@ -49,13 +52,13 @@ type Source = {
 }
 
 type Job = { id: string; job_type: string; state: string; phase: string; created_at: string }
-type Model = { id: string; model_family: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; cached_locally: boolean; temporal_trained: boolean; completion_kind: string; created_at: string }
+type Model = { id: string; model_family: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | 'h20saver' | null; cached_locally: boolean; temporal_trained: boolean; completion_kind: string; created_at: string; source?: string }
 type ScanReport = { media_count: number; annotation_count: number; media_counts_by_original_split: Record<string, number>; annotation_counts_by_source_label: Record<string, number>; malformed_annotation_count: number; source_data_modified: boolean }
 type TestReadiness = { ready_for_request: boolean; reason?: string; model_version?: string; max_upload_bytes: number }
 type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number; render?: 'overlay' | 'video' } }
 
 function date(value: string) { return new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' }) }
-function modelKindText(kind: Model['model_kind']) { return kind === 'image_tracked' ? 'ảnh + gộp theo ID' : kind === 'temporal' ? 'temporal' : 'chưa xác định loại' }
+function modelKindText(kind: Model['model_kind']) { return kind === 'h20saver' ? 'H20Saver nhập vào dự án' : kind === 'image_tracked' ? 'ảnh + gộp theo ID' : kind === 'temporal' ? 'temporal' : 'chưa xác định loại' }
 function StatusDot({ ok }: { ok: boolean }) { return <span className={`status-dot ${ok ? 'ok' : 'missing'}`} aria-label={ok ? 'Đã cấu hình' : 'Chưa cấu hình'} /> }
 function jobStateTone(state: string) { return state === 'completed' ? 'approved' : ['failed', 'cancelled'].includes(state) ? 'failed' : 'pending' }
 
@@ -140,7 +143,8 @@ function App() {
   }
 
   const databaseReady = Boolean(config?.database_configured && config?.database_reachable)
-  const approvedModel = models.find((model) => model.status === 'approved' && model.model_kind)
+  const approvedModel = models.find((model) => model.status === 'active' && model.model_kind)
+    ?? models.find((model) => model.status === 'approved' && model.model_kind)
 
   const syncApprovedModel = async () => {
     setSyncingModel(true)
@@ -193,6 +197,10 @@ function App() {
     } catch (reason) { setError(String(reason)) }
     finally { setSyncingResult(false) }
   }
+
+  const usesH20Saver = config?.detection_engine === 'h20saver'
+  const defaultModelName = usesH20Saver ? 'best.pt' : approvedModel?.display_version ?? 'Chưa có'
+  const defaultModelReady = Boolean(testReadiness?.ready_for_request)
 
   const navItem = NAV.find(([id]) => id === route)!
   const systemRows: Array<[string, boolean, string]> = [
@@ -251,15 +259,15 @@ function App() {
           <article className="metric-card"><div className="metric-top"><span>Cơ sở dữ liệu</span><Icon name="data" size={17} /></div><div className="metric-value">{config?.database_reachable ? 'Đã kết nối' : config?.database_configured ? 'Chưa kết nối được' : 'Chưa cấu hình'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.database_reachable)} /> PostgreSQL dùng chung</div></article>
           <article className="metric-card"><div className="metric-top"><span>Google Drive</span><Icon name="upload" size={17} /></div><div className="metric-value">{config?.drive_configured ? 'Đã cấu hình' : 'Chưa cấu hình'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.drive_configured)} /> Nơi lưu artifact</div></article>
           <article className="metric-card"><div className="metric-top"><span>Kaggle</span><Icon name="train" size={17} /></div><div className="metric-value">{config?.kaggle_kernel_configured ? 'Đã cấu hình' : 'Chưa cấu hình'}</div><div className="metric-foot"><StatusDot ok={Boolean(config?.kaggle_kernel_configured)} /> Notebook riêng tư · GPU</div></article>
-          <article className={`metric-card ${approvedModel ? 'accent' : ''}`}><div className="metric-top"><span>Model đang dùng</span><Icon name="check" size={17} /></div><div className="metric-value">{approvedModel?.display_version ?? 'Chưa có'}</div><div className="metric-foot"><StatusDot ok={Boolean(approvedModel)} /> {approvedModel ? modelKindText(approvedModel.model_kind) : 'Train → Đánh giá → Duyệt'}</div></article>
+          <article className={`metric-card ${defaultModelReady ? 'accent' : ''}`}><div className="metric-top"><span>Model đang dùng</span><Icon name="check" size={17} /></div><div className="metric-value">{defaultModelName}</div><div className="metric-foot"><StatusDot ok={defaultModelReady} /> {usesH20Saver ? 'H20Saver nhập vào dự án' : approvedModel ? modelKindText(approvedModel.model_kind) : 'Train → Đánh giá → Duyệt'}</div></article>
         </section>
 
         <section className="panel" id="media-test">
           <div className="panel-header">
             <div><div className="panel-kicker">Chạy thử nhanh</div><h2>Kiểm tra ảnh hoặc video</h2>
-              <p>{approvedModel ? `Dùng model đã duyệt ${approvedModel.display_version} (${modelKindText(approvedModel.model_kind)}).` : 'Cần có model đã duyệt: Train → Đánh giá → Duyệt.'}</p></div>
+              <p>{usesH20Saver ? 'Dùng best.pt đang hoạt động.' : approvedModel ? `Dùng model đã duyệt ${approvedModel.display_version} (${modelKindText(approvedModel.model_kind)}).` : 'Cần có model đã duyệt: Train → Đánh giá → Duyệt.'}</p></div>
             <div className="tag-row">
-              {approvedModel && <button className="btn btn-small" disabled={!databaseReady || syncingModel || testingMedia} onClick={() => void syncApprovedModel()} title={approvedModel.cached_locally ? 'Kiểm tra và đồng bộ lại model đã duyệt' : 'Tải model đã duyệt về máy'}>{syncingModel ? 'Đang đồng bộ…' : approvedModel.cached_locally ? 'Model đã có trên máy' : 'Tải model về máy'}</button>}
+              {!usesH20Saver && approvedModel && <button className="btn btn-small" disabled={!databaseReady || syncingModel || testingMedia} onClick={() => void syncApprovedModel()} title={approvedModel.cached_locally ? 'Kiểm tra và đồng bộ lại model đã duyệt' : 'Tải model đã duyệt về máy'}>{syncingModel ? 'Đang đồng bộ…' : approvedModel.cached_locally ? 'Model đã có trên máy' : 'Tải model về máy'}</button>}
               <span className={`state-tag ${testReadiness?.ready_for_request ? 'approved' : 'pending'}`}>{testReadiness?.ready_for_request ? `sẵn sàng · ${testReadiness.model_version}` : 'chưa sẵn sàng'}</span>
             </div>
           </div>
@@ -273,6 +281,7 @@ function App() {
             <button className="btn btn-primary" disabled={!testReadiness?.ready_for_request || !mediaFile || testingMedia} onClick={() => void uploadMedia()}>{testingMedia ? 'Đang xử lý…' : mediaKey ? 'Thử lại cùng request' : 'Chạy kiểm tra'}</button>
           </div>
           <p className="media-help">{testReadiness?.ready_for_request ? 'Tối đa 512 MiB. Video được xử lý offline; nếu Drive chưa sẵn sàng, kết quả local vẫn xem được.' : testReadiness?.reason ?? 'Cần PostgreSQL đã migrate, model đã duyệt được tải về máy và detector weights trước khi chạy.'}</p>
+          {mediaKey && mediaKind === "video" && !mediaResult && <LiveVideoPreview key={mediaKey} requestKey={mediaKey} allowStop />}
           {mediaResult && <div className="media-result">
             <div className="result-info"><b>Job {mediaResult.job_id.slice(0, 8)}</b>
               <span>{mediaResult.state} · {mediaResult.result_storage ?? 'đang xử lý'} · {fmt(mediaResult.summary?.detection_count)} lần phát hiện{mediaResult.summary?.frame_count !== undefined ? ` · ${fmt(mediaResult.summary.frame_count)} khung` : ''}</span>
@@ -311,7 +320,7 @@ function App() {
 
           <div className="right-column">
             <div className="panel model-panel" id="models"><div className="panel-header compact"><div><div className="panel-kicker">Model</div><h2>Các phiên bản</h2></div><span className="count-pill">{models.length}</span></div>
-              {models.length === 0 ? <div className="empty-state small"><b>Chưa có model</b><span>Model ứng viên cần train trên Kaggle và được duyệt trước khi dùng.</span></div> : models.slice(0, 4).map((model) => <div className="model-row" key={model.id}><div className="model-version">{model.display_version}</div><div><b>{model.model_family}</b><small>{modelKindText(model.model_kind)} · {date(model.created_at)}</small></div><span className={`state-tag ${model.status === 'approved' ? 'approved' : 'pending'}`}>{model.status}</span>{model.status === 'candidate' && <div className="review-actions"><button className="review-button approve" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'approve')}>Duyệt</button><button className="review-button reject" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'reject')}>Từ chối</button></div>}</div>)}
+              {models.length === 0 ? <div className="empty-state small"><b>Chưa có model</b><span>Model ứng viên cần train trên Kaggle và được duyệt trước khi dùng.</span></div> : models.slice(0, 4).map((model) => <div className="model-row" key={model.id}><div className="model-version">{model.display_version}</div><div><b>{model.model_family}</b>{model.source !== 'imported_h20saver' && <small>{modelKindText(model.model_kind)} · {date(model.created_at)}</small>}</div><span className={`state-tag ${['active', 'approved'].includes(model.status) ? 'approved' : 'pending'}`}>{model.status === 'active' ? 'đang dùng' : model.status}</span>{model.status === 'candidate' && <div className="review-actions"><button className="review-button approve" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'approve')}>Duyệt</button><button className="review-button reject" disabled={reviewingModel === model.id} onClick={() => void reviewModel(model, 'reject')}>Từ chối</button></div>}</div>)}
             </div>
             <div className="panel jobs-panel" id="jobs"><div className="panel-header compact"><div><div className="panel-kicker">Hàng đợi</div><h2>Tác vụ gần đây</h2></div><span className="count-pill">{jobs.length}</span></div>
               {jobs.length === 0 ? <div className="empty-state small"><b>Chưa có tác vụ</b><span>{databaseReady ? 'Các job train, kiểm tra và camera sẽ hiện ở đây.' : 'Cần kết nối PostgreSQL để ghi job bền vững.'}</span></div> : <div className="job-list">{jobs.slice(0, 5).map((job) => <div className="job-row" key={job.id}><span className="job-type">{job.job_type}</span><div className="job-info"><b>{job.id.slice(0, 8)}</b><small>{date(job.created_at)} · {job.phase}</small></div><span className={`state-tag ${jobStateTone(job.state)}`}>{job.state}</span>{job.job_type === 'inference' && ['completed', 'sync_pending'].includes(job.state) && <button className="btn btn-small" onClick={() => void showResults(job)}>Kết quả</button>}</div>)}</div>}

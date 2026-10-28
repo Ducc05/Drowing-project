@@ -2,32 +2,32 @@
   --sans: 'Be Vietnam Pro', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --mono: 'JetBrains Mono', 'Cascadia Mono', Consolas, monospace;
 
-  --bg: #0d1219;
-  --surface: #131a23;
-  --surface-2: #19212c;
-  --surface-3: #212b38;
-  --line: #273342;
-  --line-soft: #1d2631;
-  --text: #e4e9f0;
-  --text-2: #a9b4c2;
-  --text-3: #75829a;
+  --bg: #f4f7fb;
+  --surface: #ffffff;
+  --surface-2: #f0f4f8;
+  --surface-3: #e3ebf3;
+  --line: #c5d1de;
+  --line-soft: #dce4ed;
+  --text: #182b40;
+  --text-2: #40556c;
+  --text-3: #566b80;
 
-  --accent: #5ec8b5;
-  --accent-strong: #7fd8c8;
-  --accent-ink: #062520;
+  --accent: #087f73;
+  --accent-strong: #06685f;
+  --accent-ink: #ffffff;
   --accent-soft: rgba(94, 200, 181, .12);
 
   --drowning: #ef4444;
   --swimming: #10b981;
   --out-of-water: #3b82f6;
 
-  --ok: #34d399;
+  --ok: #08784f;
   --ok-soft: rgba(52, 211, 153, .12);
-  --warn: #f2b84b;
+  --warn: #8a5708;
   --warn-soft: rgba(242, 184, 75, .12);
-  --bad: #f87171;
+  --bad: #b42332;
   --bad-soft: rgba(239, 68, 68, .13);
-  --info: #7cb4f5;
+  --info: #245ea5;
   --info-soft: rgba(96, 165, 250, .12);
 
   --radius: 12px;
@@ -38,7 +38,7 @@
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
-  color-scheme: dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;

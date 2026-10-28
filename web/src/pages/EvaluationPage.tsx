@@ -1,3 +1,4 @@
+import { LiveVideoPreview } from '../LiveVideoPreview'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, when } from '../api'
@@ -5,13 +6,14 @@ import type { JobSummary } from '../api'
 import { Banner, ClassScores, Matrix, Panel, Tag } from '../ui'
 import { labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
 import { AlertBanner, AlertList, AlertTimeline, LabelLegend, VideoOverlay, VideoStats } from '../videoOverlay'
-import type { Detection, Label, VideoSummary } from '../overlayData'
+import type { AlertSegment, Detection, Label, VideoSummary } from '../overlayData'
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
 type ModelRow = {
-  id: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | null; temporal_trained: boolean; completion_kind: string
+  id: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | 'h20saver' | null; temporal_trained: boolean; completion_kind: string
   metrics: { image_validation?: Metrics; temporal_validation?: Metrics; device?: string }; cached_locally: boolean; created_at: string
   checkpoint: { drive_url: string | null; archive_sha256: string; weights_sha256?: string | null; size_bytes: number; status: string } | null
+  source?: 'imported_h20saver' | 'kaggle_registry'
 }
 type PresenceMark = {
   id: string; start_ms: number; end_ms: number; people: number; expected_label: Label | null; note: string
@@ -112,7 +114,9 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const [playbackMs, setPlaybackMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
   const [showBoxes, setShowBoxes] = useState(true)
+  const [showAllLabels, setShowAllLabels] = useState(false)
   const [detections, setDetections] = useState<Detection[]>([])
+  const [alertIntervals, setAlertIntervals] = useState<AlertSegment[]>()
   const [summary, setSummary] = useState<VideoSummary>()
   const [marks, setMarks] = useState<Mark[]>([])
   const [track, setTrack] = useState('')
@@ -137,15 +141,15 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   }, [jobId])
   const loadMarks = useCallback(async () => { setMarks((await request<{ marks: Mark[] }>(`/api/v1/jobs/${jobId}/review-marks`)).marks) }, [jobId])
   useEffect(() => {
-    request<{ detections: Detection[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => setDetections(r.detections)).catch((e) => setActionError(String(e)))
+    request<{ detections: Detection[]; alert_intervals?: AlertSegment[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals) }).catch((e) => setActionError(String(e)))
     request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setActionError(String(e)))
     void loadMarks().catch((e) => setActionError(String(e)))
     void loadPresence().catch((e) => setActionError(String(e)))
   }, [jobId, loadMarks, loadPresence, setActionError])
 
   const segments = useMemo(() => buildSegments(detections), [detections])
-  const alerts = useAlertSegments(detections)
-  const alerting = [...new Set(alerts.filter((s) => playbackMs >= s.start && playbackMs <= s.end + 500).map((s) => s.track_id))]
+  const alerts = useAlertSegments(detections, alertIntervals)
+  const alerting = [...new Set(alerts.filter((s) => playbackMs >= s.start && playbackMs < s.end + (alertIntervals ? 0 : 500)).map((s) => s.track_id))]
   const seek = (ms: number) => { if (video.current) video.current.currentTime = ms / 1000 }
   const samplesByTrack = useMemo(() => {
     const groups: Record<string, Detection[]> = {}
@@ -200,11 +204,12 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
           onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} /></div>
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} /></div>
         <AlertBanner tracks={alerting} />
         <AlertTimeline segments={alerts} durationMs={durationMs} playbackMs={playbackMs} onSeek={seek} />
         <div className="player-foot">
           <LabelLegend />
+          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện mọi nhãn để kiểm tra</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
         </div>
       </div>
@@ -386,31 +391,33 @@ export default function EvaluationPage() {
 
   return <div className="page-stack">
     <header className="page-head"><div className="eyebrow">Đánh giá</div><h1>Xem model trên ảnh và video thật</h1>
-      <p className="subtitle">Model ứng viên không tự trở thành model chính. Thử trên ảnh hoặc video; với video, bạn có thể đánh dấu các đoạn đúng/sai trước khi quyết định duyệt.</p></header>
+      <p className="subtitle">Thử model đang dùng hoặc các phiên bản lịch sử trên ảnh và video; bạn có thể đánh dấu các đoạn đúng/sai để lưu nhận xét.</p></header>
     <Banner error={action.error} notice={action.notice} />
-    <Panel kicker="Model" title="Phiên bản model" subtitle="Số liệu do Kaggle báo trên tập validation; không phải kết quả trên video của bạn."
+    <Panel kicker="Model" title="Phiên bản model" subtitle="best.pt là model đang dùng; các phiên bản Kaggle còn lại là lịch sử."
       right={<label className="field inline">Tên người duyệt<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Tên của bạn" /></label>}>
       {models.length === 0 ? <div className="empty-state">Chưa có model nào. Hoàn tất bước train ở trang Train để có model ứng viên.</div> : <>
         <div className="model-tabs">{models.map((m) => <button key={m.id} className={`model-tab ${m.id === selected ? 'on' : ''}`} onClick={() => { setSelected(m.id); setJobId('') }}>
-          <b>{m.display_version}</b><span>{m.status} · {m.model_kind === 'image_tracked' ? 'ảnh + gộp theo ID' : m.model_kind === 'temporal' ? 'temporal' : 'chưa xác định loại'}</span></button>)}</div>
+          <b>{m.display_version}</b><span>{m.status === 'active' ? 'đang dùng' : `${m.status} · ${m.model_kind === 'image_tracked' ? 'ảnh + gộp theo ID' : m.model_kind === 'temporal' ? 'temporal' : 'chưa xác định loại'}`}</span></button>)}</div>
         {model && <>
           <div className="stat-row">
-            <div><b>{model.status}</b><span>trạng thái · tạo {when(model.created_at)}</span></div>
+            <div><b>{model.status === 'active' ? 'đang dùng' : model.status}</b>{model.source !== 'imported_h20saver' && <span>trạng thái · {when(model.created_at)}</span>}</div>
             <div><b>{model.cached_locally ? 'có' : 'chưa'}</b><span>đã tải về máy này</span></div>
             <div><b>{fmt(evaluation?.test_runs.images)}</b><span>ảnh đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.test_runs.videos)}</b><span>video đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.human_review.segments)}</b><span>đoạn bạn đã đánh dấu</span></div>
           </div>
           {model.checkpoint && <div className="callout info checkpoint-box">
-            <b>Checkpoint dùng chung</b> (mọi máy tải đúng file này và được kiểm tra mã băm trước khi dùng):
+            <b>{model.source === 'imported_h20saver' ? 'File model đang dùng' : 'Checkpoint dùng chung'}</b>{model.source === 'imported_h20saver' ? ' · best.pt được nhập từ H20Saver và kiểm tra mã băm.' : ' (mọi máy tải đúng file này và được kiểm tra mã băm trước khi dùng):'}
             {model.checkpoint.drive_url && <> <a href={model.checkpoint.drive_url} target="_blank" rel="noreferrer">mở trên Drive</a></>}
             <div>SHA-256 gói: <code>{model.checkpoint.archive_sha256}</code> · {fmt(Math.round(model.checkpoint.size_bytes / 1024))} KiB · trạng thái {model.checkpoint.status}</div>
             {model.checkpoint.weights_sha256 && <div>SHA-256 trọng số: <code>{model.checkpoint.weights_sha256}</code></div>}
           </div>}
-          <div className="metric-pair"><MetricsBlock title="Validation — nhánh ảnh" metrics={model.metrics.image_validation} />{model.model_kind === 'temporal' && <MetricsBlock title="Validation — nhánh temporal" metrics={model.metrics.temporal_validation} />}</div>
+          {model.source !== 'imported_h20saver' && <div className="metric-pair"><MetricsBlock title="Validation — nhánh ảnh" metrics={model.metrics.image_validation} />{model.model_kind === 'temporal' && <MetricsBlock title="Validation — nhánh temporal" metrics={model.metrics.temporal_validation} />}</div>}
           <p className="muted">{evaluation?.training_metrics_note}</p>
           <div className="toolbar">
-            <button className="secondary-button big" disabled={action.busy || model.cached_locally} onClick={() => void sync()}>{model.cached_locally ? 'Đã có trên máy' : 'Tải model về máy để thử'}</button>
+            {model.source === 'imported_h20saver'
+              ? <button className="secondary-button big" disabled>Đang dùng best.pt</button>
+              : <button className="secondary-button big" disabled={action.busy || model.cached_locally} onClick={() => void sync()}>{model.cached_locally ? 'Đã có trên máy' : 'Tải model về máy để thử'}</button>}
             <div className={`media-dropzone ${dragOver ? 'drag-over' : ''} ${file ? 'has-file' : ''}`}
               role="group" aria-label="Chọn ảnh hoặc video để chạy thử"
               onDragOver={(event) => { event.preventDefault(); setDragOver(true) }}
@@ -428,6 +435,7 @@ export default function EvaluationPage() {
               {action.busy ? 'Đang xử lý…' : `Chạy thử ${file ? (jobModality === 'image' ? 'ảnh' : 'video') : 'với model này'}`}</button>
           </div>
           {key && jobModality === 'image' && <div className="callout info">Đang kiểm tra ảnh…</div>}
+          {key && jobModality === "video" && <LiveVideoPreview key={key} requestKey={key} />}
           {key && jobModality === 'video' && <div className="callout info progress-box">
             <div><b>{activeMediaJob?.state === 'queued' ? 'Đang chờ ô compute' : 'Đang xử lý video'}</b>
               {activeMediaJob?.progress && <> · detector đã xử lý {fmt(activeMediaJob.progress.processed)}/{fmt(Math.ceil(activeMediaJob.progress.total / (activeMediaJob.frame_stride || 3)))} khung

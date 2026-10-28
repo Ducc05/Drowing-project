@@ -5,7 +5,7 @@ import { Icon } from './icons'
 import { ALERT_COLOR, alertSegments, clock, coveredMs, labelColor, labelText, labelVi, trackName } from './overlayData'
 import type { AlertSegment, Detection, Label, VideoSummary } from './overlayData'
 
-export function VideoOverlay({ video, detections, summary, showBoxes = true }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean }) {
+export function VideoOverlay({ video, detections, summary, showBoxes = true, showAllLabels = false }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean; showAllLabels?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const element = video.current, layer = canvas.current
@@ -43,6 +43,7 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true }: {
             const [x1, y1, x2, y2] = box.map((value, index) => value * scale + (index % 2 ? oy : ox))
             ctx.strokeStyle = color; ctx.lineWidth = left.alert ? 3.5 : 2
             ctx.beginPath(); ctx.roundRect(x1, y1, x2 - x1, y2 - y1, 3); ctx.stroke()
+            if (left.label_mode === "alarm" && !left.alert && !showAllLabels) continue
             const classIndex = LABELS.indexOf(left.label as Label), score = left.class_scores && classIndex >= 0 ? left.class_scores[classIndex] : null
             const caption = left.alert ? `${trackName(trackId)} · ĐUỐI NƯỚC`
               : `${trackName(trackId)} · ${left.label ? labelText[left.label] : label}${score == null ? '' : ` ${score.toFixed(2)}`}`
@@ -58,7 +59,7 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true }: {
     }
     const resize = new ResizeObserver(draw); resize.observe(element); draw()
     return () => { alive = false; resize.disconnect(); cancelAnimationFrame(raf); if (frameHandle !== undefined && 'cancelVideoFrameCallback' in element) element.cancelVideoFrameCallback(frameHandle) }
-  }, [detections, summary, video, showBoxes])
+  }, [detections, summary, video, showBoxes, showAllLabels])
   return summary?.render === 'overlay' ? <canvas ref={canvas} className="video-overlay" aria-hidden="true" /> : null
 }
 
@@ -144,17 +145,19 @@ export function LabelLegend() {
 export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
   const video = useRef<HTMLVideoElement>(null)
   const [detections, setDetections] = useState<Detection[]>([])
+  const [alertIntervals, setAlertIntervals] = useState<AlertSegment[]>()
   const [summary, setSummary] = useState<VideoSummary>()
   const [playbackMs, setPlaybackMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
   const [showBoxes, setShowBoxes] = useState(true)
+  const [showAllLabels, setShowAllLabels] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
-    request<{ detections: Detection[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => setDetections(r.detections)).catch((e) => setError(String(e)))
+    request<{ detections: Detection[]; alert_intervals?: AlertSegment[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals) }).catch((e) => setError(String(e)))
     request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setError(String(e)))
   }, [jobId])
-  const segments = useMemo(() => alertSegments(detections), [detections])
-  const active = [...new Set(segments.filter((s) => playbackMs >= s.start && playbackMs <= s.end + 500).map((s) => s.track_id))]
+  const segments = useMemo(() => alertIntervals ?? alertSegments(detections), [detections, alertIntervals])
+  const active = [...new Set(segments.filter((s) => playbackMs >= s.start && playbackMs < s.end + (alertIntervals ? 0 : 500)).map((s) => s.track_id))]
   const seek = (ms: number) => { if (video.current) video.current.currentTime = ms / 1000 }
   const duration = durationMs || summaryDurationMs(summary)
   return <div className="result-video">
@@ -166,12 +169,13 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
             onLoadedMetadata={(event) => setDurationMs(event.currentTarget.duration * 1000 || 0)}
             onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
             onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} />
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} />
         </div>
         <AlertBanner tracks={active} />
         <AlertTimeline segments={segments} durationMs={duration} playbackMs={playbackMs} onSeek={seek} />
         <div className="player-foot">
           <LabelLegend />
+          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện mọi nhãn để kiểm tra</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
         </div>
       </div>
