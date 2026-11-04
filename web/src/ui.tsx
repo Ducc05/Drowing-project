@@ -1,5 +1,25 @@
-import type { ReactNode } from 'react'
-import { SCORE_LABELS, scoreText } from './api'
+import type { CSSProperties, ReactNode } from 'react'
+import { CONFIDENCE_MAX, CONFIDENCE_MIN, CONFIDENCE_PRESETS, SCORE_LABELS, scoreText } from './api'
+
+/** Slider + preset buttons for the per-box confidence threshold (0–1, uncalibrated model score). */
+export function ConfidenceControl({ value, onChange, disabled, title = 'Ngưỡng confidence', hint }: {
+  value: number; onChange: (value: number) => void; disabled?: boolean; title?: string; hint?: ReactNode
+}) {
+  return <div className="confidence-control" role="group" aria-label={title}>
+    <div className="confidence-head">
+      <span>{title}</span>
+      <b className="confidence-value">≥ {value.toFixed(2)}</b>
+    </div>
+    <input type="range" min={CONFIDENCE_MIN} max={CONFIDENCE_MAX} step={0.05} value={value} disabled={disabled}
+      aria-label={`${title} (0–1)`} onChange={(event) => onChange(Number(event.target.value))}
+      style={{ '--fill': `${((value - CONFIDENCE_MIN) / (CONFIDENCE_MAX - CONFIDENCE_MIN)) * 100}%` } as CSSProperties} />
+    <div className="confidence-presets">
+      {CONFIDENCE_PRESETS.map((preset) => <button type="button" key={preset} disabled={disabled}
+        className={Math.abs(preset - value) < 0.001 ? 'on' : ''} onClick={() => onChange(preset)}>{preset.toFixed(2)}</button>)}
+    </div>
+    {hint && <small className="confidence-hint">{hint}</small>}
+  </div>
+}
 
 export function ClassScores({ scores }: { scores?: number[] | null }) {
   return <span className="class-scores">{SCORE_LABELS.map((label, index) =>

@@ -87,9 +87,162 @@ def predicted_for(records: list[dict[str, Any]], track_id: str, start_ms: int, e
             "prediction_branches": dict(branches), "label_agreement": round(votes / len(selected), 3)}
 
 
+BOX_EXPECTED = (*CLASS_ORDER, "not_person")
+SWEEP_THRESHOLDS = [round(0.05 * step, 2) for step in range(1, 20)]
+
+
+def _box_score(record: dict[str, Any]) -> float | None:
+    from drowning.api.inference import box_score
+
+    return box_score(record)
+
+
+def summarize_boxes(marks: list[dict[str, Any]], missed: int = 0, run_threshold: float | None = None) -> dict[str, Any]:
+    """Per-box evaluation of reviewed image boxes ("each box has its own score, judge each box").
+
+    A reviewed box is a true positive when the reviewer's label equals the model's label. A box on something
+    that is not a person (or a duplicate box) is a false positive; a box on a real person with the wrong label is
+    both a false positive (wrong class claimed) and a miss of that person. People the model drew no box for are
+    entered as ``missed``. The threshold sweep re-applies higher thresholds to the same reviewed boxes; thresholds
+    below the threshold used when running are not measurable because those boxes were never produced.
+    """
+    def rate(hits: int, total: int) -> float | None:
+        return round(hits / total, 4) if total else None
+
+    def f1(precision: float | None, recall: float | None) -> float | None:
+        if not precision or not recall:
+            return 0.0 if precision is not None and recall is not None else None
+        return round(2 * precision * recall / (precision + recall), 4)
+
+    def mean_score(rows: list[dict[str, Any]]) -> float | None:
+        scores = [m["score"] for m in rows if m.get("score") is not None]
+        return round(sum(scores) / len(scores), 4) if scores else None
+
+    correct = [m for m in marks if m["correct"]]
+    wrong_label =[m for m in marks if not m["correct"] and m["expected_label"] != "not_person"]
+    not_person = [m for m in marks if m["expected_label"] == "not_person"]
+    real_people = len(correct) + len(wrong_label) + missed
+    matrix = {e: {p: 0 for p in CLASS_ORDER} for e in BOX_EXPECTED}
+    for mark in marks:
+        if mark.get("predicted_label") in CLASS_ORDER:
+            matrix[mark["expected_label"]][mark["predicted_label"]] += 1
+    per_class = {}
+    for label in CLASS_ORDER:
+        predicted = [m for m in marks if m.get("predicted_label") == label]
+        expected = [m for m in marks if m["expected_label"] == label]
+        hits = sum(1 for m in predicted if m["correct"])
+        per_class[label] = {"predicted_boxes": len(predicted), "expected_boxes": len(expected),
+                            "precision": rate(hits, len(predicted)), "recall_of_boxed": rate(hits, len(expected))}
+    sweep = []
+    for threshold in SWEEP_THRESHOLDS:
+        kept = [m for m in marks if m.get("score") is not None and m["score"] >= threshold]
+        tp = sum(1 for m in kept if m["correct"])
+        fp = len(kept) - tp
+        precision, recall = rate(tp, tp + fp), rate(tp, real_people)
+        sweep.append({"threshold": threshold, "kept": len(kept), "tp": tp, "fp": fp, "fn": real_people - tp,
+                      "precision": precision, "recall": recall, "f1": f1(precision, recall),
+                      "measurable": run_threshold is None or threshold + 1e-9 >= run_threshold})
+    measurable = [row for row in sweep if row["measurable"] and row["f1"] is not None and row["kept"] > 0]
+    best = max(measurable, key=lambda row: (row["f1"], row["threshold"])) if measurable else None
+    precision = rate(len(correct), len(marks))
+    recall = rate(len(correct), real_people)
+    return {"reviewed_boxes": len(marks), "correct": len(correct), "wrong_label": len(wrong_label),
+            "not_person": len(not_person), "missed": missed, "real_people": real_people,
+            "precision": precision, "recall": recall, "f1": f1(precision, recall),
+            "mean_score_correct": mean_score(correct),
+            "mean_score_wrong": mean_score([m for m in marks if not m["correct"]]),
+            "confusion_expected_by_predicted": matrix, "per_class": per_class, "run_threshold": run_threshold,
+            "threshold_sweep": sweep, "best_threshold_by_f1": best["threshold"] if best else None,
+            "caveat": "Only boxes someone reviewed are counted; this is a review log, not a benchmark."}
+
+
 class ReviewMarks:
     def __init__(self, session_factory: sessionmaker):
         self.factory = session_factory
+
+    # -- per-box review of image results -------------------------------------------------------
+    def _image_job(self, session, job_id: UUID) -> Job:
+        job = session.scalar(select(Job).where(Job.id == job_id).with_for_update())
+        if job is None:
+            raise KeyError(str(job_id))
+        payload = job.payload or {}
+        if job.job_type != "inference" or payload.get("modality") != "image" or not payload.get("result_files"):
+            raise MarkError("Only finished image inference jobs with stored results can be reviewed box by box")
+        if job.state not in {"completed", "sync_pending"}:
+            raise MarkError("The job has not finished")
+        return job
+
+    @staticmethod
+    def _box_doc(job: Job, result_file) -> tuple[list[dict[str, Any]], float | None]:
+        doc = _detections_doc(job, result_file)
+        threshold = doc.get("confidence_threshold", (job.payload or {}).get("confidence_threshold"))
+        return doc.get("detections", []), threshold
+
+    def _box_view(self, job: Job, result_file) -> dict[str, Any]:
+        detections, threshold = self._box_doc(job, result_file)
+        payload = job.payload or {}
+        marks = payload.get("box_marks", [])
+        by_index = {m["detection_index"]: m for m in marks}
+        missed = int((payload.get("box_missed") or {}).get("missed", 0))
+        boxes = [{"detection_index": index, "box_number": index + 1, "label": item.get("label"),
+                  "score": _box_score(item), "bbox_xyxy": item.get("bbox_xyxy"),
+                  "mark": by_index.get(index)} for index, item in enumerate(detections)]
+        return {"job_id": str(job.id), "model_version_id": payload.get("model_version_id"),
+                "confidence_threshold": threshold, "boxes": boxes, "marks": marks,
+                "missed": missed, "summary": summarize_boxes(marks, missed, threshold)}
+
+    def box_list(self, job_id: UUID, result_file) -> dict[str, Any]:
+        with self.factory() as session:
+            return self._box_view(self._image_job(session, job_id), result_file)
+
+    def box_mark(self, job_id: UUID, result_file, *, reviewer: str, detection_index: int, expected_label: str,
+                 note: str) -> dict[str, Any]:
+        if not reviewer.strip():
+            raise MarkError("reviewer is required")
+        if expected_label not in BOX_EXPECTED:
+            raise MarkError("expected_label must be drowning, swimming, out_of_water or not_person")
+        with self.factory() as session:
+            job = self._image_job(session, job_id)
+            detections, _ = self._box_doc(job, result_file)
+            if not 0 <= detection_index < len(detections):
+                raise MarkError("detection_index does not match a box of this image")
+            item = detections[detection_index]
+            mark = {"detection_index": detection_index, "box_number": detection_index + 1,
+                    "created_at": datetime.now(timezone.utc).isoformat(), "reviewer": reviewer.strip(),
+                    "predicted_label": item.get("label"), "score": _box_score(item),
+                    "expected_label": expected_label, "correct": expected_label == item.get("label"),
+                    "note": note.strip()[:1000]}
+            payload = dict(job.payload)
+            # One judgement per box: re-marking a box replaces the earlier judgement.
+            payload["box_marks"] = sorted([m for m in payload.get("box_marks", [])
+                                           if m["detection_index"] != detection_index] + [mark],
+                                          key=lambda m: m["detection_index"])
+            job.payload = payload
+            session.commit()
+            return self._box_view(job, result_file)
+
+    def box_missed(self, job_id: UUID, result_file, *, reviewer: str, missed: int) -> dict[str, Any]:
+        if not reviewer.strip():
+            raise MarkError("reviewer is required")
+        if not isinstance(missed, int) or isinstance(missed, bool) or not 0 <= missed <= 500:
+            raise MarkError("missed must be a whole number from 0 to 500")
+        with self.factory() as session:
+            job = self._image_job(session, job_id)
+            job.payload = {**job.payload, "box_missed": {"missed": missed, "reviewer": reviewer.strip(),
+                                                         "at": datetime.now(timezone.utc).isoformat()}}
+            session.commit()
+            return self._box_view(job, result_file)
+
+    def box_delete(self, job_id: UUID, result_file, detection_index: int) -> dict[str, Any]:
+        with self.factory() as session:
+            job = self._image_job(session, job_id)
+            marks = (job.payload or {}).get("box_marks", [])
+            kept = [m for m in marks if m["detection_index"] != detection_index]
+            if len(kept) == len(marks):
+                raise KeyError(str(detection_index))
+            job.payload = {**job.payload, "box_marks": kept}
+            session.commit()
+            return self._box_view(job, result_file)
 
     def _video_job(self, session, job_id: UUID) -> Job:
         job = session.scalar(select(Job).where(Job.id == job_id).with_for_update())
@@ -207,6 +360,17 @@ def summarize(marks: list[dict[str, Any]]) -> dict[str, Any]:
             "caveat": "A review log of the segments someone chose to mark; not a benchmark of unseen videos."}
 
 
+def box_review_for(jobs: list[Job]) -> dict[str, Any]:
+    """Per-box review pooled over a model's image jobs; measurable thresholds start at the highest run threshold."""
+    reviewed = [job for job in jobs if (job.payload or {}).get("modality") == "image"
+                and ((job.payload or {}).get("box_marks") or (job.payload or {}).get("box_missed"))]
+    marks = [m for job in reviewed for m in job.payload.get("box_marks", [])]
+    missed = sum(int((job.payload.get("box_missed") or {}).get("missed", 0)) for job in reviewed)
+    thresholds = [float(job.payload["confidence_threshold"]) for job in reviewed
+                  if job.payload.get("confidence_threshold") is not None]
+    return {**summarize_boxes(marks, missed, max(thresholds) if thresholds else None), "images_reviewed": len(reviewed)}
+
+
 def model_evaluation(session_factory: sessionmaker, model_id: UUID) -> dict[str, Any]:
     with session_factory() as session:
         model = session.get(ModelVersion, model_id)
@@ -226,6 +390,7 @@ def model_evaluation(session_factory: sessionmaker, model_id: UUID) -> dict[str,
                           "videos_with_review_marks": sum(1 for j in videos if (j.payload or {}).get("review_marks"))},
             "human_review": summarize(marks),
             "presence_review": summarize_presence([m for j in jobs for m in (j.payload or {}).get("presence_marks", [])]),
+            "box_review": box_review_for(jobs),
             "decisions": [{"decision": d.decision, "reviewer": d.reviewer_id, "comment": d.comment,
                            "at": d.created_at.isoformat()} for d in decisions]}
 
@@ -246,4 +411,5 @@ def imported_model_evaluation(session_factory: sessionmaker, model_id: UUID, dis
                           "videos_with_review_marks": sum(1 for job in videos if (job.payload or {}).get("review_marks"))},
             "human_review": summarize(marks),
             "presence_review": summarize_presence([m for job in jobs for m in (job.payload or {}).get("presence_marks", [])]),
+            "box_review": box_review_for(jobs),
             "decisions": []}

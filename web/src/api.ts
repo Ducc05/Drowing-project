@@ -46,6 +46,28 @@ export const SCORE_LABELS = ['drowning', 'swimming', 'out_of_water'] as const
 export const when = (value: string) => new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' })
 export const newKey = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
 
+/** Per-box confidence threshold accepted by the API (boxes scoring lower are not returned). */
+export const CONFIDENCE_MIN = 0.05
+export const CONFIDENCE_MAX = 0.95
+export const CONFIDENCE_PRESETS = [0.25, 0.4, 0.5, 0.7] as const
+const CONFIDENCE_KEY = 'confidence-threshold'
+export const clampConfidence = (value: number) =>
+  Math.round(Math.min(CONFIDENCE_MAX, Math.max(CONFIDENCE_MIN, value)) * 100) / 100
+
+/** The threshold chosen by the user, shared by every page and kept across reloads. ``null`` = server default. */
+export function useConfidence() {
+  const [value, setValue] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem(CONFIDENCE_KEY))
+    return stored ? clampConfidence(stored) : null
+  })
+  const update = useCallback((next: number) => {
+    const clamped = clampConfidence(next)
+    localStorage.setItem(CONFIDENCE_KEY, String(clamped))
+    setValue(clamped)
+  }, [])
+  return [value, update] as const
+}
+
 /** Re-run `load` every `ms` while `active` is true (and once on mount). */
 export function usePolling(load: () => Promise<void>, ms: number, active: boolean) {
   const saved = useRef(load)

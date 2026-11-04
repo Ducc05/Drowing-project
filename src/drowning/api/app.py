@@ -25,7 +25,8 @@ from drowning.api.train import MODES, TrainBlocked, TrainService
 from drowning.data.review import ReviewError
 from drowning.installation import installation_id
 from drowning.orchestration.supervisor import JobSupervisor
-from drowning.api.inference import InferenceUnavailable, get_approved_model, runtime_weights_missing
+from drowning.api.inference import (CONFIDENCE_MAX, CONFIDENCE_MIN, InferenceUnavailable, default_confidence,
+                                    get_approved_model, runtime_weights_missing)
 from drowning.inference.camera import (STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
                                         CameraStopUnconfirmed)
 from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
@@ -99,6 +100,23 @@ class PresenceMarkRequest(BaseModel):
 class CameraStartRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2000, description="Webcam index (0-15) or http/https/rtsp/rtmp URL")
     idempotency_key: str = Field(min_length=8, max_length=200)
+    confidence: float | None = Field(default=None, ge=0.05, le=0.95, description="Per-box confidence threshold")
+
+
+class CameraConfidenceRequest(BaseModel):
+    confidence: float = Field(ge=0.05, le=0.95)
+
+
+class BoxMarkRequest(BaseModel):
+    reviewer: str = Field(min_length=1, max_length=160)
+    detection_index: int = Field(ge=0, le=10000)
+    expected_label: Literal["drowning", "swimming", "out_of_water", "not_person"]
+    note: str = Field(default="", max_length=1000)
+
+
+class MissedBoxesRequest(BaseModel):
+    reviewer: str = Field(min_length=1, max_length=160)
+    missed: int = Field(ge=0, le=500)
 
 
 class CameraProbeRequest(BaseModel):
@@ -340,15 +358,23 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
                     raise InferenceUnavailable(missing)
             return {"ready_for_request": True, "model_version_id": str(model.id),
                     "model_version": model.display_version, "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES,
-                    "model_loaded": False, "detection_engine": request.app.state.settings.detection_engine}
+                    "model_loaded": False, "detection_engine": request.app.state.settings.detection_engine,
+                    **confidence_info(request.app.state.settings)}
         except InferenceUnavailable as exc:
             return {"ready_for_request": False, "reason": str(exc),
-                    "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES, "model_loaded": False}
+                    "max_upload_bytes": MAX_MEDIA_UPLOAD_BYTES, "model_loaded": False,
+                    **confidence_info(request.app.state.settings)}
+
+    def confidence_info(settings: Settings) -> dict[str, Any]:
+        return {"default_confidence": default_confidence(settings),
+                "confidence_range": [CONFIDENCE_MIN, CONFIDENCE_MAX]}
 
     def execute_media(upload: UploadFile, modality: str, key: str, service: LocalMediaTestJobs,
-                      model_version_id: UUID | None = None, frame_stride: int = 3):
+                      model_version_id: UUID | None = None, frame_stride: int = 3,
+                      confidence: float | None = None):
         try:
-            return service.submit(upload, modality, key, model_version_id, frame_stride=frame_stride)
+            return service.submit(upload, modality, key, model_version_id, frame_stride=frame_stride,
+                                  confidence=confidence)
         except (InferenceUnavailable, StaleExecutionOwner) as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except MediaSlotBusy as exc:
@@ -367,16 +393,18 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     def test_image(file: UploadFile = File(...),
                    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=200),
                    model_version_id: UUID | None = None,
+                   confidence: float | None = Query(None, ge=0.05, le=0.95),
                    service: LocalMediaTestJobs = Depends(get_media_jobs)):
-        return execute_media(file, "image", idempotency_key, service, model_version_id)
+        return execute_media(file, "image", idempotency_key, service, model_version_id, confidence=confidence)
 
     @app.post("/api/v1/test/video")
     def test_video(file: UploadFile = File(...),
                    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=8, max_length=200),
                    model_version_id: UUID | None = None,
                    frame_stride: int = Query(3, ge=1, le=10),
+                   confidence: float | None = Query(None, ge=0.05, le=0.95),
                    service: LocalMediaTestJobs = Depends(get_media_jobs)):
-        return execute_media(file, "video", idempotency_key, service, model_version_id, frame_stride)
+        return execute_media(file, "video", idempotency_key, service, model_version_id, frame_stride, confidence)
 
     def get_camera(request: Request, session: Session = Depends(get_session)) -> CameraService:
         service = request.app.state.camera
@@ -474,7 +502,11 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
 
     @app.post("/api/v1/camera/start")
     def camera_start(body: CameraStartRequest, service: CameraService = Depends(get_camera)):
-        return camera_call(lambda: service.start(body.source, body.idempotency_key))
+        return camera_call(lambda: service.start(body.source, body.idempotency_key, confidence=body.confidence))
+
+    @app.post("/api/v1/camera/confidence")
+    def camera_confidence(body: CameraConfidenceRequest, service: CameraService = Depends(get_camera)):
+        return camera_call(lambda: service.set_confidence(body.confidence))
 
     @app.post("/api/v1/camera/stop")
     def camera_stop(service: CameraService = Depends(get_camera)):
@@ -687,6 +719,29 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     def delete_review_mark(job_id: UUID, mark_id: str, request: Request, session: Session = Depends(get_session)):
         return marks_call(lambda: ReviewMarks(request.app.state.session_factory).delete(job_id, mark_id))
 
+    @app.get("/api/v1/jobs/{job_id}/box-marks")
+    def list_box_marks(job_id: UUID, request: Request, service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).box_list(job_id, service.result_file))
+
+    @app.post("/api/v1/jobs/{job_id}/box-marks")
+    def add_box_mark(job_id: UUID, body: BoxMarkRequest, request: Request,
+                     service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).box_mark(
+            job_id, service.result_file, reviewer=body.reviewer, detection_index=body.detection_index,
+            expected_label=body.expected_label, note=body.note))
+
+    @app.put("/api/v1/jobs/{job_id}/box-marks/missed")
+    def set_missed_boxes(job_id: UUID, body: MissedBoxesRequest, request: Request,
+                         service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).box_missed(
+            job_id, service.result_file, reviewer=body.reviewer, missed=body.missed))
+
+    @app.delete("/api/v1/jobs/{job_id}/box-marks/{detection_index}")
+    def delete_box_mark(job_id: UUID, detection_index: int, request: Request,
+                        service: LocalMediaTestJobs = Depends(get_media_jobs)):
+        return marks_call(lambda: ReviewMarks(request.app.state.session_factory).box_delete(
+            job_id, service.result_file, detection_index))
+
     @app.post("/api/v1/models/sync-approved")
     def sync_approved(request: Request, session: Session = Depends(get_session)):
         from drowning.api.model_sync import sync_approved_model
@@ -731,6 +786,7 @@ def _job_dict(job: Job) -> dict[str, Any]:
             "mode": payload.get("mode") or payload.get("modality"), "executor": payload.get("executor"),
             "progress": payload.get("progress"),
             "frame_stride": payload.get("frame_stride"),
+            "confidence_threshold": payload.get("confidence_threshold"),
             "model_version_id": payload.get("model_version_id"), "evaluation": bool(payload.get("evaluation")),
             "phase": job.phase, "idempotency_key": job.idempotency_key,
             "owner_id": job.owner_id, "execution_token": job.execution_token,

@@ -2,7 +2,8 @@ import { LiveVideoPreview } from './LiveVideoPreview'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import './pages.css'
-import { api, fmt, request } from './api'
+import { api, fmt, request, useConfidence } from './api'
+import { ConfidenceControl } from './ui'
 import CameraPage from './pages/CameraPage'
 import DataPage from './pages/DataPage'
 import EvaluationPage from './pages/EvaluationPage'
@@ -54,8 +55,8 @@ type Source = {
 type Job = { id: string; job_type: string; state: string; phase: string; created_at: string }
 type Model = { id: string; model_family: string; display_version: string; status: string; model_kind: 'temporal' | 'image_tracked' | 'h20saver' | null; cached_locally: boolean; temporal_trained: boolean; completion_kind: string; created_at: string; source?: string }
 type ScanReport = { media_count: number; annotation_count: number; media_counts_by_original_split: Record<string, number>; annotation_counts_by_source_label: Record<string, number>; malformed_annotation_count: number; source_data_modified: boolean }
-type TestReadiness = { ready_for_request: boolean; reason?: string; model_version?: string; max_upload_bytes: number }
-type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number; render?: 'overlay' | 'video' } }
+type TestReadiness = { ready_for_request: boolean; reason?: string; model_version?: string; max_upload_bytes: number; default_confidence?: number }
+type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; result_storage?: string; result_sync_error?: string; files: Record<string, string>; summary?: { detection_count?: number; frame_count?: number; render?: 'overlay' | 'video' }; confidence_threshold?: number | null }
 
 function date(value: string) { return new Date(value).toLocaleString('vi-VN', { dateStyle: 'short', timeStyle: 'short' }) }
 function modelKindText(kind: Model['model_kind']) { return kind === 'h20saver' ? 'H20Saver nhập vào dự án' : kind === 'image_tracked' ? 'ảnh + gộp theo ID' : kind === 'temporal' ? 'temporal' : 'chưa xác định loại' }
@@ -90,6 +91,7 @@ function App() {
   const [mediaResult, setMediaResult] = useState<MediaResult | null>(null)
   const [syncingResult, setSyncingResult] = useState(false)
   const [syncingModel, setSyncingModel] = useState(false)
+  const [chosenConfidence, setConfidence] = useConfidence()
 
   const refresh = useCallback(async () => {
     const [health, configResult, sourcesResult, jobsResult, modelsResult, readinessResult] = await Promise.allSettled([
@@ -166,7 +168,7 @@ function App() {
     const form = new FormData()
     form.append('file', mediaFile)
     try {
-      const result = await request<MediaResult>(`/api/v1/test/${mediaKind}`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form })
+      const result = await request<MediaResult>(`/api/v1/test/${mediaKind}?confidence=${confidence}`, { method: 'POST', headers: { 'Idempotency-Key': key }, body: form })
       setMediaResult(result)
       setMediaKey(null)
       const messages: Record<string, string> = {
@@ -201,6 +203,7 @@ function App() {
   const usesH20Saver = config?.detection_engine === 'h20saver'
   const defaultModelName = usesH20Saver ? 'best.pt' : approvedModel?.display_version ?? 'Chưa có'
   const defaultModelReady = Boolean(testReadiness?.ready_for_request)
+  const confidence = chosenConfidence ?? testReadiness?.default_confidence ?? 0.25
 
   const navItem = NAV.find(([id]) => id === route)!
   const systemRows: Array<[string, boolean, string]> = [
@@ -280,11 +283,14 @@ function App() {
               <input key={mediaKind} type="file" accept={mediaKind === 'image' ? '.jpg,.jpeg,.png,.webp,.bmp' : '.mp4,.avi,.mov,.mkv,.webm'} disabled={testingMedia} onChange={(event) => { setMediaFile(event.target.files?.[0] ?? null); setMediaKey(null); setMediaResult(null) }} /></label>
             <button className="btn btn-primary" disabled={!testReadiness?.ready_for_request || !mediaFile || testingMedia} onClick={() => void uploadMedia()}>{testingMedia ? 'Đang xử lý…' : mediaKey ? 'Thử lại cùng request' : 'Chạy kiểm tra'}</button>
           </div>
+          <ConfidenceControl value={confidence} disabled={testingMedia}
+            onChange={(value) => { setConfidence(value); setMediaKey(null) }}
+            hint={<>Ô (khung) có điểm thấp hơn ngưỡng sẽ bị bỏ. Ngưỡng thấp: bắt nhiều người hơn nhưng dễ báo nhầm; ngưỡng cao: ít báo nhầm nhưng dễ sót.{testReadiness?.default_confidence != null && <> Mặc định của hệ thống: {testReadiness.default_confidence.toFixed(2)}.</>}</>} />
           <p className="media-help">{testReadiness?.ready_for_request ? 'Tối đa 512 MiB. Video được xử lý offline; nếu Drive chưa sẵn sàng, kết quả local vẫn xem được.' : testReadiness?.reason ?? 'Cần PostgreSQL đã migrate, model đã duyệt được tải về máy và detector weights trước khi chạy.'}</p>
           {mediaKey && mediaKind === "video" && !mediaResult && <LiveVideoPreview key={mediaKey} requestKey={mediaKey} allowStop />}
           {mediaResult && <div className="media-result">
             <div className="result-info"><b>Job {mediaResult.job_id.slice(0, 8)}</b>
-              <span>{mediaResult.state} · {mediaResult.result_storage ?? 'đang xử lý'} · {fmt(mediaResult.summary?.detection_count)} lần phát hiện{mediaResult.summary?.frame_count !== undefined ? ` · ${fmt(mediaResult.summary.frame_count)} khung` : ''}</span>
+              <span>{mediaResult.state} · {mediaResult.result_storage ?? 'đang xử lý'}{mediaResult.confidence_threshold != null ? ` · ngưỡng ${mediaResult.confidence_threshold.toFixed(2)}` : ''} · {fmt(mediaResult.summary?.detection_count)} lần phát hiện{mediaResult.summary?.frame_count !== undefined ? ` · ${fmt(mediaResult.summary.frame_count)} khung` : ''}</span>
               <div className="result-links">
                 {mediaResult.files.annotated && <a href={api(mediaResult.files.annotated)} target="_blank" rel="noreferrer">Mở media kết quả</a>}
                 {mediaResult.files.source && <a href={api(mediaResult.files.source)} target="_blank" rel="noreferrer">Mở video gốc</a>}

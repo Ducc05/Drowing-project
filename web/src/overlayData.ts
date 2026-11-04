@@ -29,7 +29,34 @@ export const trackName = (trackId: string) => trackId.replace('trk-', '#')
 
 export type Detection = {
   label_mode?: "alarm" | "all"; track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number; alert?: boolean }
-export type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video' }
+export type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video'; confidence_threshold?: number | null }
+
+/** The score a box is judged by: detector confidence, else the predicted label's score (same rule as the API). */
+export function boxScore(row: { detector_confidence?: number | null; label: Label | null; class_scores: number[] | null }): number | null {
+  if (row.detector_confidence != null) return row.detector_confidence
+  const index = row.label ? LABELS.indexOf(row.label) : -1
+  return row.class_scores && index >= 0 ? row.class_scores[index] ?? null : null
+}
+
+/** Per tracker ID ("each box over time"): how often it was seen, its scores and whether it ever alerted. */
+export type TrackStat = { track_id: string; frames: number; first: number; last: number; label: Label | null; labelShare: number
+  meanScore: number | null; maxScore: number | null; maxDrowning: number | null; alerted: boolean; votes: Partial<Record<Label, number>> }
+export function trackStats(detections: Detection[]): TrackStat[] {
+  const groups = new Map<string, Detection[]>()
+  for (const row of detections) groups.set(row.track_id, [...(groups.get(row.track_id) ?? []), row])
+  return [...groups.entries()].map(([track_id, rows]) => {
+    const votes: Partial<Record<Label, number>> = {}
+    for (const row of rows) if (row.label) votes[row.label] = (votes[row.label] ?? 0) + 1
+    const top = (Object.entries(votes) as Array<[Label, number]>).sort((a, b) => b[1] - a[1])[0]
+    const scores = rows.map(boxScore).filter((value): value is number => value != null)
+    const drowning = rows.filter((row) => row.label === 'drowning').map(boxScore).filter((value): value is number => value != null)
+    return { track_id, frames: rows.length, first: Math.min(...rows.map((r) => r.timestamp_ms)), last: Math.max(...rows.map((r) => r.timestamp_ms)),
+      label: top?.[0] ?? null, labelShare: top ? top[1] / rows.length : 0, votes,
+      meanScore: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null,
+      maxScore: scores.length ? Math.max(...scores) : null, maxDrowning: drowning.length ? Math.max(...drowning) : null,
+      alerted: rows.some((row) => row.alert) }
+  }).sort((a, b) => Number(b.alerted) - Number(a.alerted) || (b.maxDrowning ?? -1) - (a.maxDrowning ?? -1) || a.track_id.localeCompare(b.track_id))
+}
 /** ``peak`` is the highest drowning score seen inside the interval (0–1, uncalibrated). */
 export type AlertSegment = { track_id: string; start: number; end: number; peak: number | null }
 

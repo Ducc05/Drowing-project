@@ -20,6 +20,10 @@ from drowning.inference.tracking import Box
 # Exact class names stored in the H20Saver checkpoint -> ontology v1 keys. No fuzzy matching.
 H20SAVER_CLASS_MAP = {"drowning": "drowning", "swimming": "swimming", "out of water": "out_of_water"}
 
+# Reference H20Saver rule: a drowning box only votes for an alarm at this score. Boxes below the
+# user-chosen display/detection threshold are never produced, so a higher threshold also raises this bar.
+DROWNING_VOTE_CONFIDENCE = 0.5
+
 _MODEL_NAMESPACE = uuid.UUID("5d0f3b8e-6a3c-4c1e-9a55-2f1b1f0c4d20")
 
 
@@ -208,7 +212,8 @@ class H20SaverInference(PersonStateInference):
         return sorted(self.monitor.alarmed)
 
     def result_metadata(self):
-        return {"alert_intervals": self._alert_intervals, "inference_policy": "h20saver_reference_votes_v1"}
+        return {"alert_intervals": self._alert_intervals, "inference_policy": "h20saver_reference_votes_v1",
+                "drowning_vote_confidence": DROWNING_VOTE_CONFIDENCE}
 
     def infer_video(self, *args, **kwargs):
         kwargs["frame_stride"] = 1
@@ -229,7 +234,7 @@ class H20SaverInference(PersonStateInference):
     def process_frame(self, image, timestamp_ms, frame_index):
         detections = self.detector.track(image)
         ids = [track_id for track_id, _, _ in detections]
-        votes = [class_index == 0 and box.confidence >= 0.5 for _, box, class_index in detections]
+        votes = [class_index == 0 and box.confidence >= DROWNING_VOTE_CONFIDENCE for _, box, class_index in detections]
         clock = timestamp_ms if isinstance(self.monitor, LiveDrowningMonitor) else frame_index
         alarmed = self.monitor.update(clock, ids, votes)
         for track_id in list(self._open_alerts):
@@ -263,10 +268,13 @@ class H20SaverInference(PersonStateInference):
             alerted = record["alert"]
             color = (0, 0, 255) if alerted else colors[record["label"]]
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if alerted else 2)
-            if alerted or self.label_mode == "all":
-                caption = f"{record['track_id']} | " + ("DROWNING ALERT" if alerted else record["label"])
-                cv2.putText(frame, caption, (max(0, x1), max(20, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX,
-                            .5, color, 2, cv2.LINE_AA)
+            # Every box shows its own score; the alert decision is still per track over time.
+            caption = (f"{record['track_id'].replace('trk-', '#')} "
+                       + ("DROWNING ALERT" if alerted else record["label"])
+                       + f" {record['detector_confidence']:.2f}")
+            (width, _), _ = cv2.getTextSize(caption, cv2.FONT_HERSHEY_SIMPLEX, .5, 2)
+            cv2.putText(frame, caption, (max(0, min(x1, frame.shape[1] - width - 2)), max(20, y1 - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, .5, color, 2, cv2.LINE_AA)
         if self.monitor.alarmed:
             cv2.rectangle(frame, (0, 0), (frame.shape[1], 30), (0, 0, 200), -1)
             cv2.putText(frame, "WARNING: DROWNING DETECTED", (10, 21), cv2.FONT_HERSHEY_SIMPLEX,

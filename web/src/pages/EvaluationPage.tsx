@@ -1,11 +1,13 @@
 import { LiveVideoPreview } from '../LiveVideoPreview'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, when } from '../api'
+import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useConfidence, when } from '../api'
 import type { JobSummary } from '../api'
-import { Banner, ClassScores, Matrix, Panel, Tag } from '../ui'
+import { Banner, ClassScores, ConfidenceControl, Matrix, Panel, Tag } from '../ui'
 import { labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
-import { AlertBanner, AlertList, AlertTimeline, LabelLegend, VideoOverlay, VideoStats } from '../videoOverlay'
+import { AlertBanner, AlertList, AlertTimeline, LabelLegend, ScoreFilter, TrackTable, VideoOverlay, VideoStats } from '../videoOverlay'
+import { BoxSummaryView, ImageBoxReview } from './BoxReview'
+import type { BoxSummary } from './BoxReview'
 import type { AlertSegment, Detection, Label, VideoSummary } from '../overlayData'
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
@@ -37,11 +39,10 @@ type MarkSummary = {
 }
 type Evaluation = {
   training_metrics_note: string; test_runs: { videos: number; images: number; videos_with_review_marks: number }
-  human_review: MarkSummary; decisions: Array<{ decision: string; reviewer: string; comment: string; at: string }>
+  human_review: MarkSummary; box_review?: BoxSummary; decisions: Array<{ decision: string; reviewer: string; comment: string; at: string }>
 }
-type ImageDetection = { detection_id?: string; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number }
 type MediaResult = { job_id: string; state: string; modality: 'image' | 'video'; model_version_id: string; files: Record<string, string>; summary?: VideoSummary }
-type VideoJob = JobSummary & { mode?: 'image' | 'video' | string | null; model_version_id?: string | null; idempotency_key?: string; frame_stride?: number; progress?: { frame: number; total: number; processed: number; elapsed_s: number; eta_s: number | null } | null }
+type VideoJob = JobSummary & { mode?: 'image' | 'video' | string | null; model_version_id?: string | null; idempotency_key?: string; frame_stride?: number; confidence_threshold?: number | null; progress?: { frame: number; total: number; processed: number; elapsed_s: number; eta_s: number | null } | null }
 type Segment = { label: Label; start: number; end: number; branch: string }
 
 function MetricsBlock({ title, metrics }: { title: string; metrics?: Metrics }) {
@@ -50,41 +51,6 @@ function MetricsBlock({ title, metrics }: { title: string; metrics?: Metrics }) 
     <p>Độ chính xác <b>{pct(metrics.accuracy)}</b> · Macro-F1 <b>{pct(metrics.macro_f1)}</b></p>
     <p className="muted">Recall: {LABELS.map((l) => `${labelText[l]} ${pct(metrics.per_class_recall?.[l])}`).join(' · ')}</p>
     {metrics.confusion_matrix && <Matrix labels={LABELS.map((l) => l)} rows={metrics.confusion_matrix} rowTitle="thật" colTitle="dự đoán" />}</div>
-}
-
-function ImageReview({ jobId }: { jobId: string }) {
-  const [result, setResult] = useState<MediaResult | null>(null)
-  const [detections, setDetections] = useState<ImageDetection[]>([])
-  const [error, setError] = useState('')
-  useEffect(() => {
-    let alive = true
-    Promise.all([
-      request<MediaResult>(`/api/v1/jobs/${jobId}/results`),
-      request<{ detections: ImageDetection[] }>(`/api/v1/jobs/${jobId}/results/detections`),
-    ]).then(([media, rows]) => {
-      if (alive) { setResult(media); setDetections(rows.detections) }
-    }).catch((reason) => { if (alive) setError(String(reason)) })
-    return () => { alive = false }
-  }, [jobId])
-  return <div className="image-review">
-    {error && <Banner error={error} />}
-    {result?.files.annotated && <img className="image-review-preview" src={api(result.files.annotated)} alt="Ảnh kết quả với hộp và nhãn dự đoán" />}
-    <div><b>{fmt(detections.length)} đối tượng được phát hiện</b>
-      <p className="muted">Điểm ba nhãn nằm trên thang 0–1, chưa phải xác suất đã hiệu chuẩn. Điểm YOLO tìm người được ghi riêng.</p>
-      {detections.length > 0 && <ul className="image-detection-list">{detections.map((item, index) => {
-        const label = item.label
-        const scoreIndex = label ? LABELS.indexOf(label) : -1
-        const score = item.class_scores && scoreIndex >= 0 ? item.class_scores[scoreIndex] : null
-        const box = item.bbox_xyxy.map((value) => Math.round(value)).join(', ')
-        return <li key={item.detection_id ?? index}>
-          <b>{label ? labelText[label] : 'Chưa phân loại'}</b>{score != null && ` · điểm ${scoreText(score)}`}
-          {item.detector_confidence != null && ` · YOLO tìm người ${scoreText(item.detector_confidence)}`}
-          <span> · bbox [{box}] · {item.prediction_branch}</span>
-          <ClassScores scores={item.class_scores} />
-        </li>
-      })}</ul>}
-    </div>
-  </div>
 }
 
 function buildSegments(detections: Detection[]): Record<string, Segment[]> {
@@ -114,7 +80,8 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const [playbackMs, setPlaybackMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
   const [showBoxes, setShowBoxes] = useState(true)
-  const [showAllLabels, setShowAllLabels] = useState(false)
+  const [showAllLabels, setShowAllLabels] = useState(true)
+  const [minScore, setMinScore] = useState<number | null>(null)
   const [detections, setDetections] = useState<Detection[]>([])
   const [alertIntervals, setAlertIntervals] = useState<AlertSegment[]>()
   const [summary, setSummary] = useState<VideoSummary>()
@@ -173,6 +140,7 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const current = () => Math.round((video.current?.currentTime ?? 0) * 1000)
   const duration = Math.max(1, durationMs, ...Object.values(segments).flat().map((s) => s.end))
   const chosenTrack = track || tracks[0] || ''
+  const viewThreshold = minScore ?? summary?.confidence_threshold ?? 0.05
   const save = () => action.run(async () => {
     await post(`/api/v1/jobs/${jobId}/review-marks`, {
       reviewer, track_id: chosenTrack, start_ms: start, end_ms: end, verdict, expected_label: expected || null, note })
@@ -204,14 +172,15 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
           onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} /></div>
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} /></div>
         <AlertBanner tracks={alerting} />
         <AlertTimeline segments={alerts} durationMs={durationMs} playbackMs={playbackMs} onSeek={seek} />
         <div className="player-foot">
           <LabelLegend />
-          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện mọi nhãn để kiểm tra</label>}
+          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện nhãn + điểm trên từng ô</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
         </div>
+        {summary?.render === 'overlay' && <ScoreFilter value={viewThreshold} runThreshold={summary?.confidence_threshold} onChange={setMinScore} />}
       </div>
       <aside className="analysis-side">
         <div className="side-head"><b>Các đoạn cảnh báo</b><span className={`pill ${alerts.length ? 'pill-bad' : 'pill-ok'}`}>{alerts.length}</span></div>
@@ -221,6 +190,14 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
         }} />
         <p className="fine-print">“Đánh dấu” điền sẵn người và khoảng thời gian vào form bên dưới; bạn tự chọn model đúng hay sai. Nhãn AI và xác nhận của bạn được lưu riêng.</p>
       </aside>
+    </div>
+    <div className="track-section">
+      <h4 className="block-title">Đánh giá theo từng ô (mỗi ID tracker)</h4>
+      <p className="muted">Mỗi ô có điểm riêng; bảng tổng hợp điểm của từng ô qua thời gian. “Đánh dấu” điền sẵn ID và toàn bộ khoảng thời gian của ô đó vào form đánh dấu bên dưới để bạn xác nhận đúng/sai.</p>
+      <TrackTable detections={detections} minScore={viewThreshold} onSeek={seek} onPick={(row) => {
+        setTrack(row.track_id); setStart(row.first); setEnd(row.last + 1); seek(row.first)
+        markForm.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }} />
     </div>
     <div className="review-layout">
       <div className="timeline-box">
@@ -303,6 +280,9 @@ export default function EvaluationPage() {
   const [activeMediaJob, setActiveMediaJob] = useState<VideoJob | null>(null)
   const [stopPending, setStopPending] = useState(false)
   const [reviewer, setReviewer] = useState(() => localStorage.getItem('reviewer') ?? '')
+  const [chosenConfidence, setConfidence] = useConfidence()
+  const [defaultConfidence, setDefaultConfidence] = useState<number | null>(null)
+  const confidence = chosenConfidence ?? defaultConfidence ?? 0.25
   const action = useAction()
   const setActionError = action.setError
 
@@ -319,6 +299,9 @@ export default function EvaluationPage() {
   useEffect(() => { void loadModels().catch((e) => setActionError(String(e))) }, [loadModels, setActionError])
   useEffect(() => { void loadEvaluation().catch((e) => setActionError(String(e))) }, [loadEvaluation, setActionError])
   useEffect(() => { localStorage.setItem('reviewer', reviewer) }, [reviewer])
+  useEffect(() => {
+    request<{ default_confidence?: number }>('/api/v1/test/readiness').then((r) => setDefaultConfidence(r.default_confidence ?? null)).catch(() => undefined)
+  }, [])
   useEffect(() => {
     if (!key || jobModality !== 'video') return
     let alive = true
@@ -355,8 +338,8 @@ export default function EvaluationPage() {
     let result: MediaResult
     try {
       const endpoint = jobModality === 'video'
-        ? `/api/v1/test/video?model_version_id=${selected}&frame_stride=3`
-        : `/api/v1/test/image?model_version_id=${selected}`
+        ? `/api/v1/test/video?model_version_id=${selected}&frame_stride=3&confidence=${confidence}`
+        : `/api/v1/test/image?model_version_id=${selected}&confidence=${confidence}`
       result = await request<MediaResult>(endpoint, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
     } catch (error) {
       const detail = error && typeof error === 'object' && 'detail' in error ? (error as { detail?: { state?: string } }).detail : undefined
@@ -434,6 +417,8 @@ export default function EvaluationPage() {
             <button className="primary-button" disabled={!model.cached_locally || !file || action.busy} onClick={() => void runMedia()}>
               {action.busy ? 'Đang xử lý…' : `Chạy thử ${file ? (jobModality === 'image' ? 'ảnh' : 'video') : 'với model này'}`}</button>
           </div>
+          <ConfidenceControl value={confidence} disabled={action.busy} onChange={(value) => { setConfidence(value); setKey(null) }}
+            hint={<>Áp dụng cho lần chạy kế tiếp: ô có điểm thấp hơn ngưỡng bị bỏ. Sau khi chạy, bạn đánh giá từng ô đúng/sai để xem ngưỡng nào hợp lý.</>} />
           {key && jobModality === 'image' && <div className="callout info">Đang kiểm tra ảnh…</div>}
           {key && jobModality === "video" && <LiveVideoPreview key={key} requestKey={key} />}
           {key && jobModality === 'video' && <div className="callout info progress-box">
@@ -447,12 +432,16 @@ export default function EvaluationPage() {
           </div>}
           {activeMediaJob?.state === 'cancelled' && <p className="muted">Đã dừng xử lý video; ô compute đã được nhả.</p>}
           {!model.cached_locally && <p className="muted">Cần tải model về máy trước, và cần PERSON_DETECTOR_WEIGHTS trong .env để chạy thử.</p>}
-          {modelJobs.length > 0 && <div className="reopen">Ảnh / video đã chạy: {modelJobs.map((job) => <button key={job.id} className={`secondary-button big ${job.id === jobId ? 'on' : ''}`} onClick={() => { setJobId(job.id); setJobModality(job.mode === 'image' ? 'image' : 'video') }}>{job.mode === 'image' ? 'Ảnh' : 'Video'} · {job.id.slice(0, 8)} · {when(job.created_at)}</button>)}</div>}
+          {modelJobs.length > 0 && <div className="reopen">Ảnh / video đã chạy: {modelJobs.map((job) => <button key={job.id} className={`secondary-button big ${job.id === jobId ? 'on' : ''}`} onClick={() => { setJobId(job.id); setJobModality(job.mode === 'image' ? 'image' : 'video') }}>{job.mode === 'image' ? 'Ảnh' : 'Video'} · {job.id.slice(0, 8)} · {when(job.created_at)}{job.confidence_threshold != null ? ` · ngưỡng ${job.confidence_threshold.toFixed(2)}` : ''}</button>)}</div>}
         </>}
       </>}
     </Panel>
-    {jobId && <Panel kicker={jobModality === 'image' ? 'Kết quả ảnh' : 'Xem và đánh dấu'} title={`${jobModality === 'image' ? 'Ảnh' : 'Video'} ${jobId.slice(0, 8)}`} subtitle={jobModality === 'image' ? 'Ảnh đã gắn khung và nhãn dự đoán.' : 'Đánh dấu là nhận định của bạn về những đoạn video; không phải benchmark.'}>
-      {jobModality === 'image' ? <ImageReview key={jobId} jobId={jobId} /> : <VideoReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} />}
+    {jobId && <Panel kicker={jobModality === 'image' ? 'Đánh giá theo từng ô' : 'Xem và đánh dấu'} title={`${jobModality === 'image' ? 'Ảnh' : 'Video'} ${jobId.slice(0, 8)}`} subtitle={jobModality === 'image' ? 'Mỗi ô có số thứ tự và điểm riêng. Đánh giá từng ô đúng hay sai để tính precision/recall theo ngưỡng.' : 'Đánh dấu là nhận định của bạn về những đoạn video; không phải benchmark.'}>
+      {jobModality === 'image' ? <ImageBoxReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} /> : <VideoReview key={jobId} jobId={jobId} reviewer={reviewer} onChanged={() => void loadEvaluation()} />}
+    </Panel>}
+    {evaluation?.box_review && (evaluation.box_review.reviewed_boxes > 0 || evaluation.box_review.missed > 0) && <Panel kicker="Tổng hợp theo từng ô" title="Đánh giá từng ô trên mọi ảnh của model này"
+      subtitle="Gộp mọi ô bạn đã đánh giá trên các ảnh chạy với model này. Ngưỡng tính được bắt đầu từ ngưỡng chạy cao nhất trong các ảnh.">
+      <BoxSummaryView summary={evaluation.box_review} highlight={confidence} />
     </Panel>}
     {evaluation && evaluation.human_review.segments > 0 && <Panel kicker="Tổng hợp" title="Nhận định của bạn về model này" subtitle={evaluation.human_review.caveat}>
       <div className="stat-row">

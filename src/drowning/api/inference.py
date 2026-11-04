@@ -22,6 +22,48 @@ class InferenceCancelled(RuntimeError):
     pass
 
 
+# Range accepted from the web/API for the per-box confidence threshold. Boxes scoring below the
+# threshold are not returned by the detector; nothing here is a calibrated probability.
+CONFIDENCE_MIN, CONFIDENCE_MAX = 0.05, 0.95
+DEFAULT_PERSON_DETECTOR_CONFIDENCE = 0.25
+
+
+def default_confidence(settings: Settings) -> float:
+    """Detector confidence threshold used when a request does not choose one."""
+    if settings.detection_engine == "h20saver":
+        return float(settings.h20saver_confidence)
+    return DEFAULT_PERSON_DETECTOR_CONFIDENCE
+
+
+def resolve_confidence(settings: Settings, requested: float | None) -> float:
+    if requested is None:
+        return round(default_confidence(settings), 4)
+    value = float(requested)
+    if not CONFIDENCE_MIN <= value <= CONFIDENCE_MAX:
+        raise ValueError(f"confidence must be between {CONFIDENCE_MIN} and {CONFIDENCE_MAX}")
+    return round(value, 4)
+
+
+def apply_confidence_threshold(pipeline: Any, value: float) -> None:
+    """Set the per-box threshold on a freshly loaded pipeline (or a running camera pipeline)."""
+    detector = getattr(pipeline, "detector", None)
+    if detector is not None and hasattr(detector, "confidence"):
+        detector.confidence = float(value)
+    pipeline.confidence_threshold = float(value)
+
+
+def box_score(record: dict[str, Any]) -> float | None:
+    """The score shown on a box: detector confidence, or the predicted label's score when there is none."""
+    confidence = record.get("detector_confidence")
+    if confidence is not None:
+        return float(confidence)
+    scores, label = record.get("class_scores"), record.get("label")
+    keys = ("drowning", "swimming", "out_of_water")
+    if scores and label in keys and len(scores) == len(keys):
+        return float(scores[keys.index(label)])
+    return None
+
+
 def _h20saver_model(settings: Settings, pinned_model_id: UUID | None):
     """With DETECTION_ENGINE=h20saver, the default model is the H20Saver weights (pinned by checksum).
 
@@ -144,29 +186,44 @@ def run_image_test(pipeline: Any, source: Path, output_dir: Path) -> dict[str, A
     with Image.open(source) as opened:
         image = ImageOps.exif_transpose(opened).convert("RGB")
     result = pipeline.infer_image(image)
+    threshold = getattr(pipeline, "confidence_threshold", None)
+    if threshold is not None:
+        result["confidence_threshold"] = threshold
     annotated = image.copy()
     draw = ImageDraw.Draw(annotated)
-    for item in result["detections"]:
+    colors = {"drowning": (239, 68, 68), "swimming": (16, 185, 129), "out_of_water": (59, 130, 246)}
+    for index, item in enumerate(result["detections"], start=1):
+        # Every box carries its own number and score so it can be reviewed on its own ("box #n").
+        item["box_number"] = index
+        item["box_score"] = box_score(item)
         x1, y1, x2, y2 = item["bbox_xyxy"]
-        draw.rectangle((x1, y1, x2, y2), outline=(52, 163, 135), width=3)
-        caption = f"{item.get('label') or 'unknown'} | {item['prediction_branch']}"
-        if item.get("detector_confidence") is not None:
-            caption += f" | YOLO={item['detector_confidence']:.3f}"
-        scores = class_scores_text(item.get("class_scores"))
-        if scores:
-            caption += "\n" + scores
+        color = colors.get(item.get("label") or "", (52, 163, 135))
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
+        caption = f"#{index} {item.get('label') or 'unknown'}"
+        if item["box_score"] is not None:
+            caption += f" {item['box_score']:.2f}"
+        if item.get("score_semantics") != "winning_class_confidence_only":
+            details = []
+            if item.get("detector_confidence") is not None:
+                details.append(f"YOLO={item['detector_confidence']:.3f}")
+            scores = class_scores_text(item.get("class_scores"))
+            if scores:
+                details.append(scores)
+            if details:
+                caption += "\n" + " | ".join(details)
         bounds = draw.multiline_textbbox((0, 0), caption, spacing=2)
         width, height = bounds[2] - bounds[0], bounds[3] - bounds[1]
         tx = max(0, min(x1, image.width - width - 6))
         ty = max(0, y1 - height - 6)
-        draw.rectangle((tx, ty, min(image.width, tx + width + 6), ty + height + 6), fill=(255, 255, 255))
-        draw.multiline_text((tx + 3, ty + 2), caption, spacing=2, fill=(17, 35, 42))
+        draw.rectangle((tx, ty, min(image.width, tx + width + 6), ty + height + 6), fill=color)
+        draw.multiline_text((tx + 3, ty + 2), caption, spacing=2, fill=(255, 255, 255))
     annotated_path = output_dir / "annotated.png"
     detections_path = output_dir / "detections.json"
     annotated.save(annotated_path, format="PNG", optimize=True)
     detections_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"model_version": result["model_version"], "detection_count": len(result["detections"]),
             "files": {"annotated": annotated_path.name, "detections": detections_path.name},
+            "width": image.width, "height": image.height, "confidence_threshold": threshold,
             "scores_are_calibrated_probabilities": False}
 
 
@@ -181,5 +238,5 @@ def run_video_test(pipeline: Any, source: Path, output_dir: Path, *, frame_strid
         files["source"] = Path(result["source_path"]).name
     else:
         files["annotated"] = output_video.name
-    return {**result, "files": files,
+    return {**result, "files": files, "confidence_threshold": getattr(pipeline, "confidence_threshold", None),
             "scores_are_calibrated_probabilities": False}

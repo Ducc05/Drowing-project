@@ -13,8 +13,9 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from drowning.api.inference import (InferenceCancelled, get_approved_model, load_approved_pipeline,
-                                    run_image_test, run_video_test, runtime_weights_missing)
+from drowning.api.inference import (InferenceCancelled, apply_confidence_threshold, get_approved_model,
+                                    load_approved_pipeline, resolve_confidence, run_image_test, run_video_test,
+                                    runtime_weights_missing)
 from drowning.api.media import persist_upload, safe_local_root
 from drowning.config import Settings
 from drowning.db.models import Artifact, Job, ModelVersion
@@ -149,9 +150,14 @@ class LocalMediaTestJobs:
         return result
 
     def submit(self, upload: UploadFile, modality: str, idempotency_key: str,
-               model_version_id: UUID | None = None, *, frame_stride: int = 3) -> dict[str, Any]:
+               model_version_id: UUID | None = None, *, frame_stride: int = 3,
+               confidence: float | None = None) -> dict[str, Any]:
         if modality == "video" and not 1 <= frame_stride <= 10:
             raise MediaRequestConflict("frame_stride must be between 1 and 10")
+        try:
+            threshold = resolve_confidence(self.settings, confidence)
+        except ValueError as exc:
+            raise MediaRequestConflict(str(exc)) from exc
         if len(idempotency_key.strip()) < 8:
             raise MediaRequestConflict("Idempotency-Key must contain at least eight characters")
         temp_path, original_name, digest, size = persist_upload(upload, self.settings.input_cache_dir,
@@ -166,6 +172,9 @@ class LocalMediaTestJobs:
                     stored_stride = existing.payload.get("frame_stride")
                     if modality == "video" and stored_stride is not None and int(stored_stride) != frame_stride:
                         raise MediaRequestConflict("Idempotency-Key is already associated with a different frame_stride")
+                    stored_threshold = existing.payload.get("confidence_threshold")
+                    if stored_threshold is not None and float(stored_threshold) != threshold:
+                        raise MediaRequestConflict("Idempotency-Key is already associated with a different confidence threshold")
                     if existing.state != JobState.QUEUED.value:
                         return {**self.result(existing.id), "created": False}
                 pinned = (UUID(existing.payload["model_version_id"])
@@ -182,6 +191,7 @@ class LocalMediaTestJobs:
                                                    "input_name": original_name, "input_sha256": digest,
                                                    "input_size_bytes": size, "model_version_id": str(model_record.id),
                                                    "frame_stride": frame_stride if modality == "video" else None,
+                                                   "confidence_threshold": threshold,
                                                    "installation_id": self.installation, "pid": os.getpid(),
                                                    "evaluation": model_version_id is not None,
                                                    "model_status_at_request": model_record.status})
@@ -225,6 +235,7 @@ class LocalMediaTestJobs:
                 pipeline, loaded_version = load_approved_pipeline(
                     session, self.settings, pinned_model_id=model_record.id,
                     inference_factory=self.inference_factory, allow_candidate=bool(job.payload.get("evaluation")))
+            apply_confidence_threshold(pipeline, threshold)
             if modality == "video":
                 pipeline.preview_callback = lambda jpeg: self._publish_preview(job.id, jpeg)
             self._transition(job.id, JobState.RUNNING, "local_inference", "local_test_started")
@@ -295,6 +306,7 @@ class LocalMediaTestJobs:
                 "result_storage": job.payload.get("result_storage"),
                 "result_sync_error": job.payload.get("result_sync_error"),
                 "summary": job.payload.get("result_summary"),
+                "confidence_threshold": job.payload.get("confidence_threshold"),
                 "files": {role: f"/api/v1/jobs/{job.id}/results/{role}" for role in files}}
 
     def stop(self, job_id: UUID) -> dict[str, Any]:

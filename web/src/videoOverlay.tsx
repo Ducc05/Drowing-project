@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { api, fmt, request, SCORE_LABELS as LABELS, scoreText } from './api'
 import { Icon } from './icons'
-import { ALERT_COLOR, alertSegments, clock, coveredMs, labelColor, labelText, labelVi, trackName } from './overlayData'
-import type { AlertSegment, Detection, Label, VideoSummary } from './overlayData'
+import { ConfidenceControl } from './ui'
+import { ALERT_COLOR, alertSegments, boxScore, clock, coveredMs, labelColor, labelText, labelVi, trackName, trackStats } from './overlayData'
+import type { AlertSegment, Detection, TrackStat, VideoSummary } from './overlayData'
 
-export function VideoOverlay({ video, detections, summary, showBoxes = true, showAllLabels = false }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean; showAllLabels?: boolean }) {
+/** Boxes drawn over the browser video. Every box carries its own score; ``minScore`` hides boxes below it (view only). */
+export function VideoOverlay({ video, detections, summary, showBoxes = true, showAllLabels = true, minScore = 0 }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean; showAllLabels?: boolean; minScore?: number }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const element = video.current, layer = canvas.current
@@ -39,14 +41,16 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true, sho
             } else if (left && right && left === right) box = left.bbox_xyxy
             else if (left && at - left.timestamp_ms <= step) box = left.bbox_xyxy
             if (!box || !left) continue
+            const score = boxScore(left)
+            if (score != null && score < minScore) continue
             const label = left.label ?? 'unknown', color = left.alert ? ALERT_COLOR : labelColor[label] ?? '#e4e9f0'
             const [x1, y1, x2, y2] = box.map((value, index) => value * scale + (index % 2 ? oy : ox))
             ctx.strokeStyle = color; ctx.lineWidth = left.alert ? 3.5 : 2
             ctx.beginPath(); ctx.roundRect(x1, y1, x2 - x1, y2 - y1, 3); ctx.stroke()
-            if (left.label_mode === "alarm" && !left.alert && !showAllLabels) continue
-            const classIndex = LABELS.indexOf(left.label as Label), score = left.class_scores && classIndex >= 0 ? left.class_scores[classIndex] : null
-            const caption = left.alert ? `${trackName(trackId)} · ĐUỐI NƯỚC`
-              : `${trackName(trackId)} · ${left.label ? labelText[left.label] : label}${score == null ? '' : ` ${score.toFixed(2)}`}`
+            const scoreTail = score == null ? '' : ` ${score.toFixed(2)}`
+            const caption = left.alert ? `${trackName(trackId)} · ĐUỐI NƯỚC${scoreTail}`
+              : showAllLabels ? `${trackName(trackId)} · ${left.label ? labelText[left.label] : label}${scoreTail}`
+              : `${trackName(trackId)}${scoreTail}`
             ctx.font = `${left.alert ? 700 : 600} 12px 'Be Vietnam Pro', 'Segoe UI', sans-serif`
             const textWidth = ctx.measureText(caption).width, tx = x1, ty = Math.max(20, y1 - 4)
             ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(tx - 1, ty - 17, textWidth + 12, 19, 4); ctx.fill()
@@ -59,7 +63,7 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true, sho
     }
     const resize = new ResizeObserver(draw); resize.observe(element); draw()
     return () => { alive = false; resize.disconnect(); cancelAnimationFrame(raf); if (frameHandle !== undefined && 'cancelVideoFrameCallback' in element) element.cancelVideoFrameCallback(frameHandle) }
-  }, [detections, summary, video, showBoxes, showAllLabels])
+  }, [detections, summary, video, showBoxes, showAllLabels, minScore])
   return summary?.render === 'overlay' ? <canvas ref={canvas} className="video-overlay" aria-hidden="true" /> : null
 }
 
@@ -137,6 +141,39 @@ export function AlertList({ segments, playbackMs, onSeek, onPick }: { segments: 
   })}</ol>
 }
 
+/** View-only score filter for finished results: hides boxes below the value, never re-runs the model. */
+export function ScoreFilter({ value, runThreshold, onChange }: { value: number; runThreshold?: number | null; onChange: (value: number) => void }) {
+  return <ConfidenceControl title="Lọc hiển thị ô theo điểm" value={value} onChange={onChange}
+    hint={<>Chỉ ẩn/hiện ô khi xem, không chạy lại model.{runThreshold != null && <> Lúc chạy đã dùng ngưỡng <b>{runThreshold.toFixed(2)}</b>: ô thấp hơn mức đó không tồn tại trong kết quả.</>} Cảnh báo không đổi theo bộ lọc này.</>} />
+}
+
+/** "Đánh giá theo từng ô" for video: one row per tracker ID with its own scores, label share and alert. */
+export function TrackTable({ detections, minScore = 0, onSeek, onPick }: { detections: Detection[]; minScore?: number; onSeek?: (ms: number) => void; onPick?: (track: TrackStat) => void }) {
+  const rows = useMemo(() => trackStats(detections), [detections])
+  if (rows.length === 0) return <p className="muted">Không có ô nào được phát hiện trong video.</p>
+  return <div className="table-scroll"><table className="data-table track-table">
+    <thead><tr><th>ID</th><th>Nhãn chiếm đa số</th><th>Điểm TB</th><th>Điểm cao nhất</th><th>Điểm drowning cao nhất</th><th>Số khung</th><th>Thời gian</th><th>Cảnh báo</th><th /></tr></thead>
+    <tbody>{rows.map((row) => <tr key={row.track_id} className={row.maxScore != null && row.maxScore < minScore ? 'dimmed' : row.alerted ? 'alert-row' : undefined}>
+      <td className="mono">{trackName(row.track_id)}</td>
+      <td>{row.label ? <><i className="dot" style={{ background: labelColor[row.label] }} />{labelText[row.label]} <small className="muted">{Math.round(row.labelShare * 100)}%</small></> : '—'}</td>
+      <td><ScoreBar value={row.meanScore} /></td>
+      <td>{scoreText(row.maxScore)}</td>
+      <td>{row.maxDrowning == null ? '—' : <b className={row.maxDrowning >= 0.5 ? 'text-bad' : undefined}>{scoreText(row.maxDrowning)}</b>}</td>
+      <td>{fmt(row.frames)}</td>
+      <td className="mono">{clock(row.first)}–{clock(row.last)}</td>
+      <td>{row.alerted ? <span className="pill pill-bad">có</span> : <span className="pill">không</span>}</td>
+      <td className="row-actions">{onSeek && <button className="btn btn-small" onClick={() => onSeek(row.first)}>Tua tới</button>}
+        {onPick && <button className="btn btn-small btn-ghost" onClick={() => onPick(row)}>Đánh dấu</button>}</td>
+    </tr>)}</tbody></table></div>
+}
+
+/** Compact 0–1 score with a bar, coloured by level. */
+export function ScoreBar({ value }: { value: number | null | undefined }) {
+  if (value == null) return <span className="muted">—</span>
+  const tone = value >= 0.7 ? 'high' : value >= 0.4 ? 'mid' : 'low'
+  return <span className={`score-bar ${tone}`}><i><u style={{ width: `${Math.min(100, value * 100)}%` }} /></i><b>{value.toFixed(2)}</b></span>
+}
+
 export function LabelLegend() {
   return <div className="label-legend">{LABELS.map((label) => <span key={label}><i style={{ background: labelColor[label] }} />{labelVi[label]} <small>{label}</small></span>)}</div>
 }
@@ -150,7 +187,8 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
   const [playbackMs, setPlaybackMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
   const [showBoxes, setShowBoxes] = useState(true)
-  const [showAllLabels, setShowAllLabels] = useState(false)
+  const [showAllLabels, setShowAllLabels] = useState(true)
+  const [minScore, setMinScore] = useState<number | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
     request<{ detections: Detection[]; alert_intervals?: AlertSegment[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals) }).catch((e) => setError(String(e)))
@@ -160,6 +198,7 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
   const active = [...new Set(segments.filter((s) => playbackMs >= s.start && playbackMs < s.end + (alertIntervals ? 0 : 500)).map((s) => s.track_id))]
   const seek = (ms: number) => { if (video.current) video.current.currentTime = ms / 1000 }
   const duration = durationMs || summaryDurationMs(summary)
+  const viewThreshold = minScore ?? summary?.confidence_threshold ?? 0.05
   return <div className="result-video">
     <VideoStats detections={detections} segments={segments} durationMs={duration} summary={summary} />
     <div className="analysis-layout">
@@ -169,15 +208,16 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
             onLoadedMetadata={(event) => setDurationMs(event.currentTarget.duration * 1000 || 0)}
             onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
             onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} />
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} />
         </div>
         <AlertBanner tracks={active} />
         <AlertTimeline segments={segments} durationMs={duration} playbackMs={playbackMs} onSeek={seek} />
         <div className="player-foot">
           <LabelLegend />
-          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện mọi nhãn để kiểm tra</label>}
+          {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện nhãn + điểm trên từng ô</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
         </div>
+        {summary?.render === 'overlay' && <ScoreFilter value={viewThreshold} runThreshold={summary?.confidence_threshold} onChange={setMinScore} />}
       </div>
       <aside className="analysis-side">
         <div className="side-head"><b>Các đoạn cảnh báo</b><span className={`pill ${segments.length ? 'pill-bad' : 'pill-ok'}`}>{segments.length}</span></div>
@@ -185,6 +225,11 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
           : <AlertList segments={segments} playbackMs={playbackMs} onSeek={seek} />}
         <p className="fine-print">Điểm 0–1 là đầu ra của model, chưa hiệu chuẩn, không phải xác suất đuối nước. Người trực vẫn cần tự quan sát trước khi can thiệp.</p>
       </aside>
+    </div>
+    <div className="track-section">
+      <h4 className="block-title">Đánh giá theo từng ô (mỗi ID tracker)</h4>
+      <p className="muted">Mỗi dòng là một ô được theo dõi qua thời gian, với điểm riêng của nó. Ô có điểm cao nhất dưới bộ lọc hiển thị được làm mờ.</p>
+      <TrackTable detections={detections} minScore={viewThreshold} onSeek={seek} />
     </div>
   </div>
 }

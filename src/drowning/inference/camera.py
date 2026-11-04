@@ -270,7 +270,8 @@ class CameraSession:
                 "latency_ms_p50": percentile(0.5), "latency_ms_p95": percentile(0.95),
                 "tracker": getattr(getattr(self.pipeline, "tracker", None), "name", None),
                 "timestamps": "monotonic_wall_clock_ms",
-                "scores_are_calibrated_probabilities": False, "alert_track_ids": alert_tracks}
+                "scores_are_calibrated_probabilities": False, "alert_track_ids": alert_tracks,
+                "confidence_threshold": getattr(self.pipeline, "confidence_threshold", None)}
 
     status = summary
 

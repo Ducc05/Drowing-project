@@ -340,6 +340,7 @@ class PersonStateInference:
             "width": width,
             "height": height,
             "detection_count": len(detections_json),
+            "confidence_threshold": getattr(self, "confidence_threshold", None),
             "fps_metadata": fps,
             "max_gap_ms": 1500,
             "max_gap_ms": 1500,

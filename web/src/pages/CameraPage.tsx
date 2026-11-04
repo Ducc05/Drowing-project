@@ -1,20 +1,20 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { api, newKey, post, request, scoreText, useAction, usePolling } from '../api'
-import { Banner, ClassScores, Panel, Tag } from '../ui'
+import { api, newKey, post, request, scoreText, useAction, useConfidence, usePolling } from '../api'
+import { Banner, ClassScores, ConfidenceControl, Panel, Tag } from '../ui'
 import { Icon } from '../icons'
 import { labelColor, labelVi, trackName, useAlarmSound } from '../overlayData'
 import type { Label } from '../overlayData'
-import { AlertBanner, LabelLegend } from '../videoOverlay'
+import { AlertBanner, LabelLegend, ScoreBar } from '../videoOverlay'
 
 type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; class_scores?: number[] | null; bbox_xyxy: number[]; alert?: boolean }
 type Status = {
   active: boolean; job_id?: string; source?: string; state?: string; error?: string | null; width?: number; height?: number
   frames_read?: number; frames_processed?: number; frames_dropped?: number; processed_fps?: number | null
   latency_ms_p50?: number | null; latency_ms_p95?: number | null; elapsed_seconds?: number; tracker?: string | null
-  alert_track_ids?: string[]; records?: Record_[]; last_session?: Status | null
+  alert_track_ids?: string[]; records?: Record_[]; last_session?: Status | null; confidence_threshold?: number | null
 }
-type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string }
+type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string; default_confidence?: number }
 
 const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
   image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)',
@@ -50,11 +50,25 @@ export default function CameraPage() {
     const result = await post<{ width: number; height: number; source: string }>('/api/v1/camera/probe', { source })
     setProbe(`Kết nối được ${result.source}: ${result.width}×${result.height}`)
   })
-  const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera') }); await load(); return 'Camera đã chạy. Ô compute chung đang được giữ.' })
+  const [chosenConfidence, setConfidence] = useConfidence()
+  const confidence = chosenConfidence ?? readiness?.default_confidence ?? 0.25
+  const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence }); await load(); return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.` })
   const stop = () => action.run(async () => { await post('/api/v1/camera/stop'); await load(); return 'Đã dừng camera và xác nhận các luồng xử lý đã thoát.' })
 
   const [sound, setSound] = useState(true)
   const active = status.active
+  // While the camera runs, a new threshold is sent after the slider settles; it applies from the next frame.
+  const pendingLive = useRef<number | null>(null)
+  useEffect(() => {
+    if (!active || status.confidence_threshold == null || Math.abs(status.confidence_threshold - confidence) < 0.001) return
+    if (pendingLive.current === confidence) return
+    const timer = window.setTimeout(() => {
+      pendingLive.current = confidence
+      post('/api/v1/camera/confidence', { confidence }).catch((reason) => setActionError(String(reason)))
+        .finally(() => { pendingLive.current = null })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [active, confidence, status.confidence_threshold, setActionError])
   const summary = active ? status : status.last_session
   const records = active ? status.records ?? [] : []
   const alertRecords = records.filter((r) => r.alert)
@@ -77,6 +91,12 @@ export default function CameraPage() {
       <div className="source-status">
         <Tag tone={readiness?.ready_for_request ? 'ok' : 'warn'}>{readiness?.ready_for_request ? `model ${readiness.model_version}` : 'chưa sẵn sàng'}</Tag>
         <span className="muted">Thông tin đăng nhập trong URL không được hiển thị hay lưu lại.</span>
+      </div>
+      <div className="wide">
+        <ConfidenceControl value={confidence} onChange={setConfidence}
+          hint={active
+            ? <>Đổi ngưỡng khi camera đang chạy: áp dụng từ khung kế tiếp (đang dùng {status.confidence_threshold != null ? status.confidence_threshold.toFixed(2) : '—'}).</>
+            : <>Ô có điểm thấp hơn ngưỡng không được vẽ và không được tính. Cảnh báo đuối nước vẫn cần ô drowning đủ điểm trong đủ thời gian.</>} />
       </div>
       {probe && <div className="callout ok wide">{probe}</div>}
       {!readiness?.ready_for_request && <div className="callout warn wide">{readiness?.reason ?? 'Cần model đã duyệt, model được tải về máy và PERSON_DETECTOR_WEIGHTS trước khi chạy camera.'}</div>}
@@ -141,7 +161,7 @@ export default function CameraPage() {
                 <span className="track-dot" style={{ background: r.alert ? 'var(--drowning)' : labelColor[r.label ?? ''] ?? 'var(--text-3)' }} />
                 <div className="track-main">
                   <div><b>{trackName(r.track_id)}</b> <span>{r.label ? labelVi[r.label as Label] ?? r.label : 'chưa phân loại'}</span></div>
-                  <small>{branchText[r.prediction_branch] ?? r.prediction_branch} · YOLO {scoreText(r.detector_confidence)}</small>
+                  <small>{branchText[r.prediction_branch] ?? r.prediction_branch} · điểm ô <ScoreBar value={r.detector_confidence} /></small>
                   <ClassScores scores={r.class_scores} />
                 </div>
               </li>)}</ul>}
