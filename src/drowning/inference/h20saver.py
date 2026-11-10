@@ -111,7 +111,9 @@ class H20SaverDetector:
         return detections
 
     def track(self, image):
-        bgr = np.ascontiguousarray(np.asarray(image.convert("RGB"))[..., ::-1])
+        # Video decoding already yields BGR ndarrays: pass them straight through (no RGB round trip).
+        bgr = (np.ascontiguousarray(image) if isinstance(image, np.ndarray)
+               else np.ascontiguousarray(np.asarray(image.convert("RGB"))[..., ::-1]))
         result = self.model.track(bgr, persist=True, tracker="bytetrack.yaml", conf=self.confidence,
                                   imgsz=640, device=self.device, verbose=False)[0]
         boxes = result.boxes
@@ -184,6 +186,8 @@ class H20SaverInference(PersonStateInference):
             raise ValueError("model_version must be pinned for the inference job")
         self.detector, self.model_version = detector, model_version
         self.model_kind = "h20saver"
+        self.accepts_bgr = True  # infer_video may hand frames over as OpenCV BGR arrays
+        self.frame_stride = 1
         self.tracker = SimpleNamespace(name="ultralytics_bytetrack")
         self.monitor = DrowningMonitor()
         self.label_mode = "alarm"
@@ -199,11 +203,18 @@ class H20SaverInference(PersonStateInference):
         for tracker in getattr(predictor, "trackers", []):
             tracker.reset()
 
-    def configure_stream(self, fps):
-        self.frame_ms = 1000 / fps
-        self.monitor = DrowningMonitor(max(1, round(2 * fps)))
+    def configure_stream(self, fps, frame_stride=None):
+        """Offline video: the 2 s vote window holds ``2*fps/stride`` processed samples.
+
+        With ``frame_stride=1`` this is exactly the reference per-frame window. A larger stride keeps the
+        same duration and the same alarm/clear ratios; ``frame_ms`` becomes the sample period.
+        """
+        self.frame_stride = max(1, int(frame_stride or self.frame_stride))
+        self.frame_ms = 1000 * self.frame_stride / fps
+        self.monitor = DrowningMonitor(max(1, round(2 * fps / self.frame_stride)))
 
     def configure_live_stream(self, fps):
+        self.frame_stride = 1
         self.frame_ms = 1000 / fps
         self.monitor = LiveDrowningMonitor(self.frame_ms)
 
@@ -215,10 +226,10 @@ class H20SaverInference(PersonStateInference):
         return {"alert_intervals": self._alert_intervals, "inference_policy": "h20saver_reference_votes_v1",
                 "drowning_vote_confidence": DROWNING_VOTE_CONFIDENCE}
 
-    def infer_video(self, *args, **kwargs):
-        kwargs["frame_stride"] = 1
+    def infer_video(self, video_path, output_video, *, frame_stride=3, **kwargs):
+        self.frame_stride = frame_stride  # read by configure_stream, which the base class calls with the fps
         self.reset_stream()
-        return super().infer_video(*args, **kwargs)
+        return super().infer_video(video_path, output_video, frame_stride=frame_stride, **kwargs)
 
     def infer_image(self, image):
         output = []
@@ -235,7 +246,7 @@ class H20SaverInference(PersonStateInference):
         detections = self.detector.track(image)
         ids = [track_id for track_id, _, _ in detections]
         votes = [class_index == 0 and box.confidence >= DROWNING_VOTE_CONFIDENCE for _, box, class_index in detections]
-        clock = timestamp_ms if isinstance(self.monitor, LiveDrowningMonitor) else frame_index
+        clock = timestamp_ms if isinstance(self.monitor, LiveDrowningMonitor) else frame_index // self.frame_stride
         alarmed = self.monitor.update(clock, ids, votes)
         for track_id in list(self._open_alerts):
             if track_id not in alarmed:

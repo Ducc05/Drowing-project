@@ -178,13 +178,53 @@ class ReferenceMonitorTests(unittest.TestCase):
         self.assertEqual(image[0, 0].tolist(), [30, 20, 10])
         self.assertEqual((kwargs["persist"], kwargs["tracker"], kwargs["imgsz"]), (True, "bytetrack.yaml", 640))
 
-    def test_video_forces_every_frame_and_initializes_two_second_window(self):
+    def test_video_honours_stride_and_keeps_a_two_second_window(self):
         pipeline = H20SaverInference(FakeDetector([]), model_version="fixture")
         pipeline.configure_stream(25)
         self.assertEqual(pipeline.monitor.window_frames, 50)
+        pipeline.configure_stream(60, frame_stride=3)  # 20 processed samples per second of video
+        self.assertEqual(pipeline.monitor.window_frames, 40)
         with patch.object(PersonStateInference, "infer_video", return_value={}) as infer:
             pipeline.infer_video(Path("fixture.mp4"), Path("result.webm"), frame_stride=3)
-        self.assertEqual(infer.call_args.kwargs["frame_stride"], 1)
+        self.assertEqual(infer.call_args.kwargs["frame_stride"], 3)
+
+    def test_stride_does_not_change_when_the_alarm_starts(self):
+        """Same 2s window / 0.7 ratio whatever the stride: the first alert time moves by < one sample period."""
+        fps, first_alert = 30, {}
+        for stride in (1, 2, 3, 5):
+            frames = [[(Box(10, 10, 50, 80, confidence=0.8), 0)] for _ in range(0, 150, stride)]
+            pipeline = H20SaverInference(FakeDetector(frames), model_version="fixture")
+            pipeline.configure_stream(fps, frame_stride=stride)
+            image = Image.new("RGB", (100, 100))
+            for index in range(0, 150, stride):
+                record, = pipeline.process_frame(image, round(index * 1000 / fps), index)
+                if record["alert"]:
+                    first_alert[stride] = index * 1000 / fps
+                    break
+            self.assertIn(stride, first_alert)
+        for stride, at_ms in first_alert.items():
+            self.assertLessEqual(abs(at_ms - first_alert[1]), stride * 1000 / fps + 1, first_alert)
+
+    def test_stride_alert_interval_covers_the_sample_period(self):
+        frames = [[(Box(10, 10, 50, 80, confidence=0.8), 0)] for _ in range(20)]
+        pipeline = H20SaverInference(FakeDetector(frames), model_version="fixture")
+        pipeline.configure_stream(30, frame_stride=3)
+        image = Image.new("RGB", (100, 100))
+        for n in range(20):
+            pipeline.process_frame(image, round(n * 3 * 1000 / 30), n * 3)
+        interval, = pipeline.result_metadata()["alert_intervals"]
+        self.assertEqual(interval["end"], 19 * 100 + 100)  # last sample + one 100 ms sample period
+
+    def test_bgr_frames_are_passed_to_the_detector_without_a_colour_round_trip(self):
+        model = FakeYOLO()
+        model.track = lambda image, **kwargs: (model.calls.append((image, kwargs)) or [SimpleNamespace(boxes=None)])
+        detector = H20SaverDetector(Path("unused.pt"), model=model)
+        frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        frame[0, 0] = (30, 20, 10)  # BGR as OpenCV decodes it
+        detector.track(frame)
+        sent, _ = model.calls[0]
+        self.assertEqual(sent[0, 0].tolist(), [30, 20, 10])
+        self.assertTrue(sent.flags["C_CONTIGUOUS"])
 
 
 class PersistentAlarmTests(unittest.TestCase):
@@ -221,7 +261,7 @@ class PersistentAlarmTests(unittest.TestCase):
             pipeline = H20SaverInference(FakeDetector(frames), model_version="synthetic")
             previews = []
             pipeline.preview_callback = previews.append
-            result = pipeline.infer_video(source, output, frame_stride=3)
+            result = pipeline.infer_video(source, output, frame_stride=1)
             self.assertTrue(previews)
             self.assertEqual(cv2.imdecode(np.frombuffer(previews[0], dtype=np.uint8), cv2.IMREAD_COLOR).shape[:2], (32, 32))
             data = json.loads(Path(result["detections_path"]).read_text())

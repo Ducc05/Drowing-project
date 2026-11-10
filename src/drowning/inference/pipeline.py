@@ -15,6 +15,7 @@ from drowning.inference.aggregation import TrackAggregator
 from drowning.inference.annotations import class_scores_text
 from drowning.inference.buffer import FrameCrop, TemporalWindowBuffer
 from drowning.inference.detector import PersonDetector
+from drowning.inference.frame_reader import FrameReader
 from drowning.inference.tracking import Box, ByteTracker
 from drowning.ml.bundle import validate_manifest
 from drowning.ml.model import CLASS_KEYS, DrowningTemporalModel, torch
@@ -253,55 +254,53 @@ class PersonStateInference:
         last_progress = started
         last_preview = 0.0
         timestamp_fallback_used = False
+        # Decoding runs on a background thread (overlapping the model); engines that accept BGR ndarrays
+        # (accepts_bgr) skip the BGR->RGB->PIL conversion.
+        reader = FrameReader(capture, pos_msec_prop=cv2.CAP_PROP_POS_MSEC, frame_stride=frame_stride,
+                             keep_skipped=writer is not None, max_frames=max_frames)
+        passes_bgr = bool(getattr(self, "accepts_bgr", False))
         try:
-            while max_frames is None or frame_index < max_frames:
-                if should_stop is not None and should_stop():
-                    raise InferenceCancelled("Video inference was cancelled")
-                ok = capture.grab()
-                if not ok:
-                    break
-                if frame_index % frame_stride == 0:
-                    retrieved, bgr = capture.retrieve()
-                    if not retrieved:
-                        break
-                    frame_ms = float(capture.get(cv2.CAP_PROP_POS_MSEC))
-                    if frame_ms <= last_timestamp:
-                        frame_ms = frame_index * 1000.0 / fps
-                        timestamp_fallback_used = True
-                    timestamp = max(0, int(round(frame_ms)))
-                    last_timestamp = timestamp
-                    image = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-                    records = self.process_frame(image, timestamp, frame_index)
-                    detections_json.extend(records)
-                    preview_callback = getattr(self, "preview_callback", None)
-                    if preview_callback is not None and time.monotonic() - last_preview >= 0.2:
-                        from drowning.inference.preview import preview_jpeg
-                        jpeg = preview_jpeg(bgr, records, timestamp,
-                            getattr(self, "active_alert_tracks", []))
-                        if jpeg is not None:
-                            preview_callback(jpeg)
-                        last_preview = time.monotonic()
-                    if writer is not None:
-                        writer.write(self.draw_annotations(bgr, records))
-                    processed_frames += 1
-                    now = time.monotonic()
-                    if progress is not None and (processed_frames % 20 == 0 or now - last_progress >= 2):
-                        total = total_frames or frame_index + 1
-                        estimated_processed = (total + frame_stride - 1) // frame_stride
-                        elapsed = now - started
-                        rate = processed_frames / elapsed if elapsed > 0 else 0
-                        progress({"frame": frame_index + 1, "total": total, "processed": processed_frames,
-                                  "elapsed_s": round(elapsed, 2),
-                                  "eta_s": round(max(0, estimated_processed - processed_frames) / rate, 2) if rate else None})
-                        last_progress = now
-                elif writer is not None:
-                    # Keep the legacy rendered video at its original duration; skipped frames are copied
-                    # without color conversion, detection, classification, tracking, or annotation.
-                    retrieved, bgr = capture.retrieve()
-                    if not retrieved:
-                        break
-                    writer.write(bgr)
-                frame_index += 1
+            with reader:
+                for item in reader:
+                    if should_stop is not None and should_stop():
+                        raise InferenceCancelled("Video inference was cancelled")
+                    frame_index, bgr = item.index, item.frame
+                    if item.process:
+                        frame_ms = item.pos_msec
+                        if frame_ms <= last_timestamp:
+                            frame_ms = frame_index * 1000.0 / fps
+                            timestamp_fallback_used = True
+                        timestamp = max(0, int(round(frame_ms)))
+                        last_timestamp = timestamp
+                        image = bgr if passes_bgr else Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+                        records = self.process_frame(image, timestamp, frame_index)
+                        detections_json.extend(records)
+                        preview_callback = getattr(self, "preview_callback", None)
+                        if preview_callback is not None and time.monotonic() - last_preview >= 0.2:
+                            from drowning.inference.preview import preview_jpeg
+                            jpeg = preview_jpeg(bgr, records, timestamp,
+                                getattr(self, "active_alert_tracks", []))
+                            if jpeg is not None:
+                                preview_callback(jpeg)
+                            last_preview = time.monotonic()
+                        if writer is not None:
+                            writer.write(self.draw_annotations(bgr, records))
+                        processed_frames += 1
+                        now = time.monotonic()
+                        if progress is not None and (processed_frames % 20 == 0 or now - last_progress >= 2):
+                            total = total_frames or frame_index + 1
+                            estimated_processed = (total + frame_stride - 1) // frame_stride
+                            elapsed = now - started
+                            rate = processed_frames / elapsed if elapsed > 0 else 0
+                            progress({"frame": frame_index + 1, "total": total, "processed": processed_frames,
+                                      "elapsed_s": round(elapsed, 2),
+                                      "eta_s": round(max(0, estimated_processed - processed_frames) / rate, 2) if rate else None})
+                            last_progress = now
+                    elif writer is not None:
+                        # Keep the legacy rendered video at its original duration; skipped frames are copied
+                        # without color conversion, detection, classification, tracking, or annotation.
+                        writer.write(bgr)
+            frame_index = reader.frames_read
         except Exception:
             capture.release()
             if writer is not None:
