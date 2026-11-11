@@ -11,7 +11,9 @@ from uuid import UUID
 from sqlalchemy.orm import sessionmaker
 
 from drowning.api.inference import (InferenceUnavailable, apply_confidence_threshold, get_approved_model,
-                                    load_approved_pipeline, resolve_confidence, runtime_weights_missing)
+                                    load_approved_pipeline, resolve_cell_grid, resolve_confidence,
+                                    runtime_weights_missing)
+from drowning.inference.cells import format_cell_grid
 from drowning.config import Settings
 from drowning.db.models import Job
 from drowning.db.repositories import (ExecutionSlotBusy, StaleExecutionOwner, claim_execution_slot, create_job,
@@ -80,7 +82,8 @@ class CameraService:
                 raise CameraBusy(self._job_id, "A camera session is already running; stop it before probing")
         return {**probe_camera(source, self.capture_factory), "source": display}
 
-    def start(self, raw_source: str, idempotency_key: str, *, confidence: float | None = None) -> dict[str, Any]:
+    def start(self, raw_source: str, idempotency_key: str, *, confidence: float | None = None,
+              cell_grid: str | None = None) -> dict[str, Any]:
         source, display = parse_camera_source(raw_source)
         if len(idempotency_key.strip()) < 8:
             raise CameraSourceError("idempotency_key must contain at least eight characters")
@@ -88,6 +91,10 @@ class CameraService:
             threshold = resolve_confidence(self.settings, confidence)
         except ValueError as exc:
             raise CameraSourceError(str(exc)) from exc
+        try:
+            grid = resolve_cell_grid(self.settings, cell_grid)
+        except ValueError as exc:
+            raise CameraSourceError(f"cell_grid: {exc}") from exc
         with self._lock:
             if self._session is not None:
                 self._finalize_if_dead()
@@ -102,7 +109,7 @@ class CameraService:
                 job, created = create_job(session, job_type="inference", idempotency_key=idempotency_key, payload={
                     "executor": "local", "modality": "camera", "source": display,
                     "model_version_id": str(model_record.id), "installation_id": self.installation,
-                    "confidence_threshold": threshold, "pid": os.getpid()})
+                    "confidence_threshold": threshold, "cell_grid": format_cell_grid(grid), "pid": os.getpid()})
             if not created:
                 raise CameraBusy(job.id, "This Idempotency-Key was already used; start a new session with a new key")
             try:
@@ -120,7 +127,7 @@ class CameraService:
                                  {"model_version_id": str(model_record.id), "execution_token": token})
                 with self.factory() as session:
                     pipeline, loaded = load_approved_pipeline(session, self.settings, pinned_model_id=model_record.id,
-                                                              inference_factory=self.inference_factory)
+                                                              inference_factory=self.inference_factory, cell_grid=grid)
                 apply_confidence_threshold(pipeline, threshold)
                 camera = CameraSession(pipeline, source, display_source=display, capture_factory=self.capture_factory)
                 geometry = camera.start()

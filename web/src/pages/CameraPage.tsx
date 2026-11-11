@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { api, newKey, post, request, scoreText, useAction, useConfidence, usePolling } from '../api'
-import { Banner, ClassScores, ConfidenceControl, Panel, Tag } from '../ui'
+import { api, newKey, post, request, scoreText, useAction, useCellGrid, useConfidence, usePolling, cellGridParam, parseCellGrid } from '../api'
+import { Banner, CellGridControl, ClassScores, ConfidenceControl, Panel, Tag } from '../ui'
 import { Icon } from '../icons'
 import { labelColor, labelVi, trackName, useAlarmSound } from '../overlayData'
 import type { Label } from '../overlayData'
@@ -14,7 +14,7 @@ type Status = {
   latency_ms_p50?: number | null; latency_ms_p95?: number | null; elapsed_seconds?: number; tracker?: string | null
   alert_track_ids?: string[]; records?: Record_[]; last_session?: Status | null; confidence_threshold?: number | null
 }
-type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string; default_confidence?: number }
+type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string; default_confidence?: number; default_cell_grid?: string; cell_grid_supported?: boolean }
 
 const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
   image_tracked: 'ảnh gộp theo ID', image_frame: 'ảnh đơn (chưa đủ khung)',
@@ -52,7 +52,10 @@ export default function CameraPage() {
   })
   const [chosenConfidence, setConfidence] = useConfidence()
   const confidence = chosenConfidence ?? readiness?.default_confidence ?? 0.25
-  const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence }); await load(); return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.` })
+  const [chosenGrid, setCellGrid] = useCellGrid()
+  const cellGrid = chosenGrid ?? parseCellGrid(readiness?.default_cell_grid)
+  const gridParam = readiness?.cell_grid_supported ? cellGridParam(chosenGrid) : undefined
+  const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam }); await load(); return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.` })
   const stop = () => action.run(async () => { await post('/api/v1/camera/stop'); await load(); return 'Đã dừng camera và xác nhận các luồng xử lý đã thoát.' })
 
   const [sound, setSound] = useState(true)
@@ -97,6 +100,8 @@ export default function CameraPage() {
           hint={active
             ? <>Đổi ngưỡng khi camera đang chạy: áp dụng từ khung kế tiếp (đang dùng {status.confidence_threshold != null ? status.confidence_threshold.toFixed(2) : '—'}).</>
             : <>Ô có điểm thấp hơn ngưỡng không được vẽ và không được tính. Cảnh báo đuối nước vẫn cần ô drowning đủ điểm trong đủ thời gian.</>} />
+        {readiness?.cell_grid_supported && <CellGridControl value={cellGrid} onChange={setCellGrid} disabled={active}
+          hint={active ? 'Đổi lưới cần dừng rồi bật lại camera.' : undefined} />}
       </div>
       {probe && <div className="callout ok wide">{probe}</div>}
       {!readiness?.ready_for_request && <div className="callout warn wide">{readiness?.reason ?? 'Cần model đã duyệt, model được tải về máy và PERSON_DETECTOR_WEIGHTS trước khi chạy camera.'}</div>}

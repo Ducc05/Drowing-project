@@ -1,8 +1,15 @@
 # Implementation status
 
-Last updated: 2026-10-28
+Last updated: 2026-11-11
 
 This status separates code written, checks actually run, and work not verified. It does not claim cloud, model, or user acceptance based on local tests.
+
+## Công tắc "Tự chia vùng", số ô lưới và fps video — 2026-11-11
+
+- **Code đã viết:** lớp lọc theo ô lưới (`inference/cells.py`) giờ chọn được theo từng lượt chạy. Test video nhận `?cell_grid=6x4|off`, `POST /api/v1/camera/start` nhận `cell_grid`; chuỗi được chuẩn hoá (`" 8X6 "` → `8x6`), sai (`0x4`, `33x4`, `abc`) bị từ chối (video 409, camera 422, không tạo job), `Idempotency-Key` trùng mà khác lưới bị 409. Không gửi thì dùng `H20SAVER_CELL_GRID`. Giá trị lưu trong payload job (`cell_grid`, có trong `/api/v1/jobs` và kết quả); test ảnh bỏ qua tham số. `/api/v1/test/readiness` trả thêm `default_cell_grid`, `cell_grid_range` (1–32), `cell_grid_supported` (chỉ engine H20Saver). Video: tiến trình có thêm `fps` (khung model xử lý mỗi giây), tóm tắt kết quả có `processing_fps`, `elapsed_s`, `fps_metadata`. Web: công tắc "Tự chia vùng" + ô số Cột/Hàng (nhớ trong `localStorage`) ở Tổng quan (chỉ khi chọn video), Đánh giá và Camera (mờ khi camera đang chạy, đổi lưới cần dừng rồi bật lại); trình xem trực tiếp hiện "Tốc độ model: X khung/giây", kết quả hiện fps kèm fps video gốc và bước nhảy. Tắt công tắc chỉ bỏ lớp lọc ô lưới, lớp lọc chuyển động giữ nguyên.
+- **Test đã chạy:** `tests/test_cell_gate_settings.py` (10 test mới) và 2 test fps mới trong `tests/test_inference_pipeline.py`. `python -m unittest discover -s tests`: **429 test đạt, 1 bỏ qua**. `npm run build` đạt; `npm run lint` không lỗi, vẫn 4 cảnh báo `set-state-in-effect` cũ như trước thay đổi.
+- **Kiểm tra dữ liệu thật / cloud:** chưa. Chưa chạy trên video thật hoặc webcam thật với lưới khác mặc định; chưa mở giao diện trên trình duyệt (web không có test runner, Playwright không kết nối được). fps là tốc độ đo trên máy chạy server (phụ thuộc CPU/GPU, độ phân giải, `frame_stride`), không phải chất lượng model.
+- **Người dùng nghiệm thu:** chưa.
 
 ## Confidence threshold control and per-box review — 2026-11-04
 
@@ -490,3 +497,11 @@ Direction from the user: training data comes from labeled datasets they find; th
 - Fix: a box now credits every cell it covers (still at least the centre +-0.25 cell). Small far-away people occupy about one cell, so rescuer-crossing behaviour is unchanged (existing tests still pass); close-up people keep their alert. Simulation (live clock, 14 fps, one steady track): close-up person with the grid now alerts 90% of the time at every tested swing (was 0% from 60 px) with first alert at 2.1 s.
 - Tests run: `unittest discover -s tests` - all OK; new `LargeBodyCellTests` (box coverage, small box unchanged, close-up swing 30-130 px still alerts, close-up victim alerts with both gates while a fast swimmer does not) and `DiagnosticFieldTests` (`drowning_vote`, `drowning_ratio` in every record, visible through `/api/v1/camera/status`).
 - Still open / not verified: no confirmation on the user's real webcam. Other possible causes remain untested there: label flicker between drowning/swimming and tracker ID switches (saved video results show hundreds of IDs per video and tracks whose 2 s drowning ratio stays below 0.7), which the per-track 70%/2 s rule needs to be stable. The motion gate also blocks a victim whose centre swings more than ~1.5 body lengths in 3 s (seen in simulation for a small body thrashing +-50 px); threshold is unbenchmarked.
+
+
+## 2026-11-11 - Exclude local artifact and sharing folders from Git
+
+- Implementation: retained existing DrowningProject/ and gui-cho-ban/ ignore rules; removed their 33 newly staged files from the Git index, keeping local files.
+- Checks run: both folders ignored with no indexed files; all 33 files still exist with unchanged sizes. Before cleanup: 434,998,570 staged bytes, including 434,469,654 bytes in DrowningProject.
+- Real-data/cloud checks: none; no training, inference or cloud operation.
+- User acceptance: pending.

@@ -34,6 +34,13 @@ def _protect_output(path: Path) -> Path:
     return target
 
 
+def processing_fps(processed: int, elapsed_s: float) -> float | None:
+    """Frames the model handled per second of wall clock (None when it cannot be measured yet)."""
+    if processed <= 0 or elapsed_s <= 0:
+        return None
+    return round(processed / elapsed_s, 1)
+
+
 class PersonStateInference:
     def __init__(self, model: DrowningTemporalModel, manifest: dict[str, Any], detector: PersonDetector,
                  *, model_version: str, device: str = "cpu", sequence_length: int | None = None,
@@ -293,7 +300,7 @@ class PersonStateInference:
                             elapsed = now - started
                             rate = processed_frames / elapsed if elapsed > 0 else 0
                             progress({"frame": frame_index + 1, "total": total, "processed": processed_frames,
-                                      "elapsed_s": round(elapsed, 2),
+                                      "elapsed_s": round(elapsed, 2), "fps": processing_fps(processed_frames, elapsed),
                                       "eta_s": round(max(0, estimated_processed - processed_frames) / rate, 2) if rate else None})
                             last_progress = now
                     elif writer is not None:
@@ -315,10 +322,10 @@ class PersonStateInference:
         if frame_index == 0:
             temp_video.unlink(missing_ok=True)
             raise ValueError("Input video contains no decodable frames")
+        elapsed = time.monotonic() - started
         if progress is not None:
-            elapsed = time.monotonic() - started
             progress({"frame": frame_index, "total": total_frames or frame_index, "processed": processed_frames,
-                      "elapsed_s": round(elapsed, 2), "eta_s": 0})
+                      "elapsed_s": round(elapsed, 2), "fps": processing_fps(processed_frames, elapsed), "eta_s": 0})
         if render == "overlay":
             import shutil
             source_target = target.parent / f"source{source.suffix.casefold()}"
@@ -370,7 +377,8 @@ class PersonStateInference:
                 "detections_path": str(results_path), "frame_count": frame_index,
                 "processed_frames": processed_frames, "frame_stride": frame_stride, "render": render,
                 "detection_count": len(detections_json), "model_version": self.model_version,
-                "timestamp_quality": payload["timestamp_quality"]}
+                "timestamp_quality": payload["timestamp_quality"], "elapsed_s": round(elapsed, 2),
+                "processing_fps": processing_fps(processed_frames, elapsed), "fps_metadata": fps}
 
     @staticmethod
     def _prediction(logits: torch.Tensor) -> dict[str, Any]:

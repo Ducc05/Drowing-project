@@ -1,9 +1,9 @@
 import { LiveVideoPreview } from '../LiveVideoPreview'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useConfidence, when } from '../api'
+import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useCellGrid, useConfidence, when, cellGridParam, parseCellGrid } from '../api'
 import type { JobSummary } from '../api'
-import { Banner, ClassScores, ConfidenceControl, Matrix, Panel, Tag } from '../ui'
+import { Banner, CellGridControl, ClassScores, ConfidenceControl, Matrix, Panel, Tag } from '../ui'
 import { cellOverlayOf, labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
 import { AlertBanner, AlertList, AlertTimeline, LabelLegend, ScoreFilter, TrackTable, VideoOverlay, VideoStats } from '../videoOverlay'
 import { BoxSummaryView, ImageBoxReview } from './BoxReview'
@@ -286,6 +286,10 @@ export default function EvaluationPage() {
   const [chosenConfidence, setConfidence] = useConfidence()
   const [defaultConfidence, setDefaultConfidence] = useState<number | null>(null)
   const confidence = chosenConfidence ?? defaultConfidence ?? 0.25
+  const [chosenGrid, setCellGrid] = useCellGrid()
+  const [gridInfo, setGridInfo] = useState({ supported: false, fallback: '6x4' })
+  const cellGrid = chosenGrid ?? parseCellGrid(gridInfo.fallback)
+  const gridParam = gridInfo.supported ? cellGridParam(chosenGrid) : undefined
   const action = useAction()
   const setActionError = action.setError
 
@@ -303,7 +307,8 @@ export default function EvaluationPage() {
   useEffect(() => { void loadEvaluation().catch((e) => setActionError(String(e))) }, [loadEvaluation, setActionError])
   useEffect(() => { localStorage.setItem('reviewer', reviewer) }, [reviewer])
   useEffect(() => {
-    request<{ default_confidence?: number }>('/api/v1/test/readiness').then((r) => setDefaultConfidence(r.default_confidence ?? null)).catch(() => undefined)
+    request<{ default_confidence?: number; default_cell_grid?: string; cell_grid_supported?: boolean }>('/api/v1/test/readiness')
+      .then((r) => { setDefaultConfidence(r.default_confidence ?? null); setGridInfo({ supported: Boolean(r.cell_grid_supported), fallback: r.default_cell_grid ?? '6x4' }) }).catch(() => undefined)
   }, [])
   useEffect(() => {
     if (!key || jobModality !== 'video') return
@@ -341,7 +346,7 @@ export default function EvaluationPage() {
     let result: MediaResult
     try {
       const endpoint = jobModality === 'video'
-        ? `/api/v1/test/video?model_version_id=${selected}&frame_stride=3&confidence=${confidence}`
+        ? `/api/v1/test/video?model_version_id=${selected}&frame_stride=3&confidence=${confidence}${gridParam ? `&cell_grid=${gridParam}` : ''}`
         : `/api/v1/test/image?model_version_id=${selected}&confidence=${confidence}`
       result = await request<MediaResult>(endpoint, { method: 'POST', headers: { 'Idempotency-Key': k }, body: form })
     } catch (error) {
@@ -422,6 +427,8 @@ export default function EvaluationPage() {
           </div>
           <ConfidenceControl value={confidence} disabled={action.busy} onChange={(value) => { setConfidence(value); setKey(null) }}
             hint={<>Áp dụng cho lần chạy kế tiếp: ô có điểm thấp hơn ngưỡng bị bỏ. Sau khi chạy, bạn đánh giá từng ô đúng/sai để xem ngưỡng nào hợp lý.</>} />
+          {gridInfo.supported && jobModality === 'video' && <CellGridControl value={cellGrid} disabled={action.busy}
+            onChange={(value) => { setCellGrid(value); setKey(null) }} />}
           {key && jobModality === 'image' && <div className="callout info">Đang kiểm tra ảnh…</div>}
           {key && jobModality === "video" && <LiveVideoPreview key={key} requestKey={key} />}
           {key && jobModality === 'video' && <div className="callout info progress-box">

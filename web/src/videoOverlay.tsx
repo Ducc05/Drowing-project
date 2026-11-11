@@ -103,6 +103,8 @@ export function VideoStats({ detections, segments, durationMs, summary }: { dete
       <small>{segments.length ? 'cần người xem lại' : 'không có cảnh báo'}</small></div>
     <div className={`vstat ${segments.length ? 'danger' : 'calm'}`}><span>Tổng thời gian cảnh báo</span><b>{clock(alertMs)}</b>
       <small>gộp khoảng trùng, không cộng dồn</small></div>
+    {summary?.processing_fps != null && <div className="vstat"><span>Tốc độ model</span><b>{summary.processing_fps.toFixed(1)} khung/giây</b>
+      <small>video gốc {summary.fps_metadata != null ? `${+summary.fps_metadata.toFixed(2)} khung/giây` : '—'}, bước nhảy {summary.frame_stride ?? '—'} · đo trên máy chạy server</small></div>}
   </div>
 }
 

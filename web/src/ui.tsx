@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { CONFIDENCE_MAX, CONFIDENCE_MIN, CONFIDENCE_PRESETS, SCORE_LABELS, scoreText } from './api'
+import { CELL_GRID_MAX, CONFIDENCE_MAX, CONFIDENCE_MIN, CONFIDENCE_PRESETS, SCORE_LABELS, clampCellSide, scoreText } from './api'
+import type { CellGridChoice } from './api'
 
 /** Slider + preset buttons for the per-box confidence threshold (0–1, uncalibrated model score). */
 export function ConfidenceControl({ value, onChange, disabled, title = 'Ngưỡng confidence', hint }: {
@@ -18,6 +20,42 @@ export function ConfidenceControl({ value, onChange, disabled, title = 'Ngưỡn
         className={Math.abs(preset - value) < 0.001 ? 'on' : ''} onClick={() => onChange(preset)}>{preset.toFixed(2)}</button>)}
     </div>
     {hint && <small className="confidence-hint">{hint}</small>}
+  </div>
+}
+
+/** One side of the grid. The text being typed is kept as a draft (so the field can be emptied while retyping);
+ *  only in-range whole numbers are committed live, and the draft is clamped to 1–32 when the field loses focus. */
+function CellSideInput({ label, value, disabled, onCommit }: { label: string; value: number; disabled?: boolean; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  return <label className="cell-grid-field"><span>{label}</span>
+    <input type="number" min={1} max={CELL_GRID_MAX} step={1} value={draft ?? String(value)} disabled={disabled}
+      aria-label={`Số ${label.toLowerCase()} của lưới`}
+      onChange={(event) => {
+        setDraft(event.target.value)
+        const typed = event.target.valueAsNumber
+        if (Number.isInteger(typed) && typed >= 1 && typed <= CELL_GRID_MAX) onCommit(typed)
+      }}
+      onBlur={() => {
+        if (draft !== null && draft.trim() !== '' && Number.isFinite(Number(draft))) onCommit(clampCellSide(Number(draft)))
+        setDraft(null)
+      }} /></label>
+}
+
+/** Switch + columns x rows for the cell gate: an alarm is confirmed only where its grid cell holds sustained drowning votes. */
+export function CellGridControl({ value, onChange, disabled, hint }: {
+  value: CellGridChoice; onChange: (value: CellGridChoice) => void; disabled?: boolean; hint?: ReactNode
+}) {
+  const side = (label: string, key: 'cols' | 'rows') => <CellSideInput label={label} value={value[key]} disabled={disabled || !value.enabled}
+    onCommit={(next) => onChange({ ...value, [key]: next })} />
+  return <div className="confidence-control cell-grid-control" role="group" aria-label="Tự chia vùng">
+    <div className="cell-grid-row">
+      <label className="switch"><input type="checkbox" checked={value.enabled} disabled={disabled}
+        onChange={(event) => onChange({ ...value, enabled: event.target.checked })} /><span />Tự chia vùng</label>
+      {side('Cột', 'cols')}<span className="muted">×</span>{side('Hàng', 'rows')}
+    </div>
+    <small className="confidence-hint">{hint ?? (value.enabled
+      ? `Khung hình chia thành lưới ${value.cols}×${value.rows}. Cảnh báo đuối nước chỉ được xác nhận khi ô người đó đứng có phiếu drowning liên tục; người bơi lướt qua nhiều ô không bị báo.`
+      : 'Đã tắt: cảnh báo dựa trên từng người, không kiểm tra theo vùng. Người cứu hộ bơi nhanh dễ bị báo nhầm hơn.')}</small>
   </div>
 }
 

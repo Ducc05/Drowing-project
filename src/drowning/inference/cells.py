@@ -34,6 +34,11 @@ def parse_cell_grid(text: str) -> tuple[int, int] | None:
     return cols, rows
 
 
+def format_cell_grid(grid: tuple[int, int] | None) -> str:
+    """Inverse of ``parse_cell_grid``: ``"6x4"`` or ``"off"``."""
+    return "off" if grid is None else f"{grid[0]}x{grid[1]}"
+
+
 @dataclass(frozen=True)
 class CellGrid:
     cols: int

@@ -41,8 +41,8 @@ class TrainBlocked(RuntimeError):
 
 class TrainService:
     def __init__(self, session_factory: sessionmaker, settings: Settings, *, project_root: Path,
-                 reviews: SourceReviewService, which: Callable[[str], str | None] | None = None,
-                 home: Path | None = None, environ: dict[str, str] | None = None, policy_path: Path | None = None):
+                reviews: SourceReviewService, which: Callable[[str], str | None] | None = None,
+                home: Path | None = None, environ: dict[str, str] | None = None, policy_path: Path | None = None):
         self.factory, self.settings, self.project_root, self.reviews = session_factory, settings, project_root, reviews
         self.which, self.home = which or (lambda _name: find_kaggle()), home or Path.home()
         self.environ = os.environ if environ is None else environ
@@ -53,7 +53,7 @@ class TrainService:
         kaggle_files = [self.home / ".kaggle" / "kaggle.json", self.home / ".config" / "kaggle" / "kaggle.json",
                         self.home / ".kaggle" / "access_token"]
         credentials = ((bool(self.environ.get("KAGGLE_USERNAME")) and bool(self.environ.get("KAGGLE_KEY")))
-                       or bool(self.environ.get("KAGGLE_API_TOKEN")) or any(path.is_file() for path in kaggle_files))
+                    or bool(self.environ.get("KAGGLE_API_TOKEN")) or any(path.is_file() for path in kaggle_files))
         token_file = Path(self.settings.google_oauth_token_file).expanduser()
         return {
             "kaggle_cli_installed": bool(self.which("kaggle")),
@@ -73,9 +73,9 @@ class TrainService:
             media_ok = load_grouping_review(source, self.reviews.reviews_dir) is not None or (
                 source.get("grouping", {}).get("status") == "verified")
             rows.append({"source_id": source.get("source_id"), "source_version": str(source.get("source_version")),
-                         "modality": source.get("modality"), "format": source.get("format"),
-                         "mapping_hash": mapping_fingerprint(source), "mapping_approved": is_mapping_approved(source),
-                         "groups_verified": media_ok})
+                        "modality": source.get("modality"), "format": source.get("format"),
+                        "mapping_hash": mapping_fingerprint(source), "mapping_approved": is_mapping_approved(source),
+                        "groups_verified": media_ok})
         return rows
 
     def _latest(self, session, mode: str, *, completed_only: bool = True) -> Job | None:
@@ -105,7 +105,7 @@ class TrainService:
             slot = session.get(ExecutionSlot, 1)
             active = session.get(Job, slot.job_id) if slot is not None and slot.job_id else None
             recent = session.scalars(select(Job).where(Job.job_type.in_(["prepare", "train"]))
-                                     .order_by(Job.created_at.desc()).limit(1)).first()
+                                    .order_by(Job.created_at.desc()).limit(1)).first()
             queued = [j for j in session.scalars(select(Job).where(Job.state == "queued")) if (j.payload or {}).get("executor") == "kaggle"]
         prepare_summary = (prepare.payload or {}).get("run_summary") if prepare else None
         stale, prepared_sources = [], {}
@@ -117,7 +117,7 @@ class TrainService:
                     stale.append(row["source_id"])
         advisory = gating_mode(self.policy_path) == "advisory"
         unconfirmed = [f"{r['source_id']}: " + ("mapping not confirmed" if not r["mapping_approved"] else "source groups not confirmed")
-                       for r in sources if not (r["mapping_approved"] and r["groups_verified"])]
+                    for r in sources if not (r["mapping_approved"] and r["groups_verified"])]
         approvals_missing = [] if advisory else [
             f"{r['source_id']}: " + ("mapping not approved" if not r["mapping_approved"] else "source groups not verified")
             for r in sources if not (r["mapping_approved"] and r["groups_verified"])]

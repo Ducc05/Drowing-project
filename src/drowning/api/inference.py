@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from drowning.config import Settings
 from drowning.db.models import Artifact, ModelRegistry, ModelVersion
+from drowning.inference.cells import MAX_CELLS_PER_AXIS, format_cell_grid, parse_cell_grid
 
 
 class InferenceUnavailable(RuntimeError):
@@ -42,6 +43,23 @@ def resolve_confidence(settings: Settings, requested: float | None) -> float:
     if not CONFIDENCE_MIN <= value <= CONFIDENCE_MAX:
         raise ValueError(f"confidence must be between {CONFIDENCE_MIN} and {CONFIDENCE_MAX}")
     return round(value, 4)
+
+
+USE_SETTINGS: Any = object()  # sentinel: ``cell_grid=None`` means "gate off", so "unset" needs its own value
+
+
+def resolve_cell_grid(settings: Settings, requested: str | None) -> tuple[int, int] | None:
+    """The cell grid for one run: the configured default, or the requested ``"CxR"`` / ``"off"`` (ValueError if bad)."""
+    if requested is None:
+        return settings.h20saver_cell_grid
+    return parse_cell_grid(requested)
+
+
+def cell_grid_info(settings: Settings) -> dict[str, Any]:
+    """What the web needs to offer the grid control; only the H20Saver engine has a cell gate."""
+    return {"default_cell_grid": format_cell_grid(settings.h20saver_cell_grid),
+            "cell_grid_range": [1, MAX_CELLS_PER_AXIS],
+            "cell_grid_supported": settings.detection_engine == "h20saver"}
 
 
 def apply_confidence_threshold(pipeline: Any, value: float) -> None:
@@ -143,7 +161,8 @@ def get_approved_model(session: Session, settings: Settings, *, pinned_model_id:
 
 def load_approved_pipeline(session: Session, settings: Settings, *,
                            inference_factory: Callable[[ModelVersion, dict[str, Any], Path], Any] | None = None,
-                           pinned_model_id: UUID | None = None, allow_candidate: bool = False):
+                           pinned_model_id: UUID | None = None, allow_candidate: bool = False,
+                           cell_grid: Any = USE_SETTINGS):
     model_record, bundle_dir, manifest = get_approved_model(session, settings, pinned_model_id=pinned_model_id,
                                                             allow_candidate=allow_candidate)
     if inference_factory is not None:
@@ -155,7 +174,8 @@ def load_approved_pipeline(session: Session, settings: Settings, *,
             pipeline, _ = load_h20saver_pipeline(Path(settings.h20saver_weights_path).expanduser(),
                                                  confidence=settings.h20saver_confidence,
                                                  device=settings.model_device,
-                                                 cell_grid=settings.h20saver_cell_grid,
+                                                 cell_grid=(settings.h20saver_cell_grid
+                                                            if cell_grid is USE_SETTINGS else cell_grid),
                                                  cell_window_s=settings.h20saver_cell_window_seconds,
                                                  motion_max_body_lengths=settings.h20saver_motion_max_body_lengths,
                                                  motion_window_s=settings.h20saver_motion_window_seconds)

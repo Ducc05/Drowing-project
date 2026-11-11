@@ -68,6 +68,41 @@ export function useConfidence() {
   return [value, update] as const
 }
 
+/** The cell-grid ("Tự chia vùng") choice for one run: switch plus columns x rows (each 1–32). */
+export const CELL_GRID_MAX = 32
+export type CellGridChoice = { enabled: boolean; cols: number; rows: number }
+const CELL_GRID_KEY = 'cell-grid-choice'
+export const clampCellSide = (value: number) => Math.min(CELL_GRID_MAX, Math.max(1, Math.round(Number.isFinite(value) ? value : 1)))
+
+/** Server value ("6x4" / "off") -> control state. Unknown or missing text means the built-in 6×4, switched on. */
+export function parseCellGrid(text?: string | null): CellGridChoice {
+  const value = (text ?? '').trim().toLowerCase()
+  const match = /^(\d+)x(\d+)$/.exec(value)
+  if (match) return { enabled: true, cols: clampCellSide(Number(match[1])), rows: clampCellSide(Number(match[2])) }
+  return { enabled: value !== 'off', cols: 6, rows: 4 }
+}
+
+/** Control state -> API value; ``fallback`` (no choice made yet) lets the server use its own default. */
+export const cellGridParam = (choice: CellGridChoice | null, fallback?: string) =>
+  choice === null ? fallback : choice.enabled ? `${choice.cols}x${choice.rows}` : 'off'
+
+/** The grid chosen by the user, shared by every page and kept across reloads. ``null`` = server default. */
+export function useCellGrid() {
+  const [value, setValue] = useState<CellGridChoice | null>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(CELL_GRID_KEY) ?? 'null')
+      return stored && typeof stored === 'object'
+        ? { enabled: Boolean(stored.enabled), cols: clampCellSide(Number(stored.cols)), rows: clampCellSide(Number(stored.rows)) } : null
+    } catch { return null }
+  })
+  const update = useCallback((next: CellGridChoice) => {
+    const clean = { enabled: next.enabled, cols: clampCellSide(next.cols), rows: clampCellSide(next.rows) }
+    try { localStorage.setItem(CELL_GRID_KEY, JSON.stringify(clean)) } catch { /* private window: keep the choice in memory only */ }
+    setValue(clean)
+  }, [])
+  return [value, update] as const
+}
+
 /** Re-run `load` every `ms` while `active` is true (and once on mount). */
 export function usePolling(load: () => Promise<void>, ms: number, active: boolean) {
   const saved = useRef(load)

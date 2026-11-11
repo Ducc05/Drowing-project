@@ -25,8 +25,8 @@ from drowning.api.train import MODES, TrainBlocked, TrainService
 from drowning.data.review import ReviewError
 from drowning.installation import installation_id
 from drowning.orchestration.supervisor import JobSupervisor
-from drowning.api.inference import (CONFIDENCE_MAX, CONFIDENCE_MIN, InferenceUnavailable, default_confidence,
-                                    get_approved_model, runtime_weights_missing)
+from drowning.api.inference import (CONFIDENCE_MAX, CONFIDENCE_MIN, InferenceUnavailable, cell_grid_info,
+                                    default_confidence, get_approved_model, runtime_weights_missing)
 from drowning.inference.camera import (STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
                                         CameraStopUnconfirmed)
 from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
@@ -101,6 +101,7 @@ class CameraStartRequest(BaseModel):
     source: str = Field(min_length=1, max_length=2000, description="Webcam index (0-15) or http/https/rtsp/rtmp URL")
     idempotency_key: str = Field(min_length=8, max_length=200)
     confidence: float | None = Field(default=None, ge=0.05, le=0.95, description="Per-box confidence threshold")
+    cell_grid: str | None = Field(default=None, max_length=16, description='Cell gate grid "CxR" or "off"')
 
 
 class CameraConfidenceRequest(BaseModel):
@@ -367,14 +368,14 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
 
     def confidence_info(settings: Settings) -> dict[str, Any]:
         return {"default_confidence": default_confidence(settings),
-                "confidence_range": [CONFIDENCE_MIN, CONFIDENCE_MAX]}
+                "confidence_range": [CONFIDENCE_MIN, CONFIDENCE_MAX], **cell_grid_info(settings)}
 
     def execute_media(upload: UploadFile, modality: str, key: str, service: LocalMediaTestJobs,
                       model_version_id: UUID | None = None, frame_stride: int = 3,
-                      confidence: float | None = None):
+                      confidence: float | None = None, cell_grid: str | None = None):
         try:
             return service.submit(upload, modality, key, model_version_id, frame_stride=frame_stride,
-                                  confidence=confidence)
+                                  confidence=confidence, cell_grid=cell_grid)
         except (InferenceUnavailable, StaleExecutionOwner) as exc:
             raise HTTPException(status_code=409, detail=str(exc))
         except MediaSlotBusy as exc:
@@ -403,8 +404,10 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
                    model_version_id: UUID | None = None,
                    frame_stride: int = Query(3, ge=1, le=10),
                    confidence: float | None = Query(None, ge=0.05, le=0.95),
+                   cell_grid: str | None = Query(None, max_length=16),
                    service: LocalMediaTestJobs = Depends(get_media_jobs)):
-        return execute_media(file, "video", idempotency_key, service, model_version_id, frame_stride, confidence)
+        return execute_media(file, "video", idempotency_key, service, model_version_id, frame_stride, confidence,
+                             cell_grid)
 
     def get_camera(request: Request, session: Session = Depends(get_session)) -> CameraService:
         service = request.app.state.camera
@@ -502,7 +505,8 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
 
     @app.post("/api/v1/camera/start")
     def camera_start(body: CameraStartRequest, service: CameraService = Depends(get_camera)):
-        return camera_call(lambda: service.start(body.source, body.idempotency_key, confidence=body.confidence))
+        return camera_call(lambda: service.start(body.source, body.idempotency_key, confidence=body.confidence,
+                                                         cell_grid=body.cell_grid))
 
     @app.post("/api/v1/camera/confidence")
     def camera_confidence(body: CameraConfidenceRequest, service: CameraService = Depends(get_camera)):
@@ -787,6 +791,7 @@ def _job_dict(job: Job) -> dict[str, Any]:
             "progress": payload.get("progress"),
             "frame_stride": payload.get("frame_stride"),
             "confidence_threshold": payload.get("confidence_threshold"),
+            "cell_grid": payload.get("cell_grid"),
             "model_version_id": payload.get("model_version_id"), "evaluation": bool(payload.get("evaluation")),
             "phase": job.phase, "idempotency_key": job.idempotency_key,
             "owner_id": job.owner_id, "execution_token": job.execution_token,

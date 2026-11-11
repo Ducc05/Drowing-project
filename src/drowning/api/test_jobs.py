@@ -13,8 +13,9 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from drowning.api.inference import (InferenceCancelled, apply_confidence_threshold, get_approved_model,
-                                    load_approved_pipeline, resolve_confidence, run_image_test, run_video_test,
+from drowning.api.inference import (USE_SETTINGS, InferenceCancelled, apply_confidence_threshold, get_approved_model,
+                                    load_approved_pipeline, resolve_cell_grid, resolve_confidence, run_image_test,
+                                    run_video_test,
                                     runtime_weights_missing)
 from drowning.api.media import persist_upload, safe_local_root
 from drowning.config import Settings
@@ -22,6 +23,7 @@ from drowning.db.models import Artifact, Job, ModelVersion
 from drowning.db.repositories import (ExecutionSlotBusy, StaleExecutionOwner, assert_execution_owner,
                                       claim_execution_slot, create_job, release_execution_slot, transition_job)
 from drowning.domain.jobs import JobState
+from drowning.inference.cells import format_cell_grid
 from drowning.installation import installation_id
 from drowning.integrations.drive import sha256_file
 
@@ -151,13 +153,20 @@ class LocalMediaTestJobs:
 
     def submit(self, upload: UploadFile, modality: str, idempotency_key: str,
                model_version_id: UUID | None = None, *, frame_stride: int = 3,
-               confidence: float | None = None) -> dict[str, Any]:
+               confidence: float | None = None, cell_grid: str | None = None) -> dict[str, Any]:
         if modality == "video" and not 1 <= frame_stride <= 10:
             raise MediaRequestConflict("frame_stride must be between 1 and 10")
         try:
             threshold = resolve_confidence(self.settings, confidence)
         except ValueError as exc:
             raise MediaRequestConflict(str(exc)) from exc
+        grid, grid_text = USE_SETTINGS, None  # the cell gate only exists for video (temporal) runs
+        if modality == "video":
+            try:
+                grid = resolve_cell_grid(self.settings, cell_grid)
+            except ValueError as exc:
+                raise MediaRequestConflict(f"cell_grid: {exc}") from exc
+            grid_text = format_cell_grid(grid)
         if len(idempotency_key.strip()) < 8:
             raise MediaRequestConflict("Idempotency-Key must contain at least eight characters")
         temp_path, original_name, digest, size = persist_upload(upload, self.settings.input_cache_dir,
@@ -175,6 +184,9 @@ class LocalMediaTestJobs:
                     stored_threshold = existing.payload.get("confidence_threshold")
                     if stored_threshold is not None and float(stored_threshold) != threshold:
                         raise MediaRequestConflict("Idempotency-Key is already associated with a different confidence threshold")
+                    stored_grid = existing.payload.get("cell_grid")
+                    if grid_text is not None and stored_grid is not None and stored_grid != grid_text:
+                        raise MediaRequestConflict("Idempotency-Key is already associated with a different cell_grid")
                     if existing.state != JobState.QUEUED.value:
                         return {**self.result(existing.id), "created": False}
                 pinned = (UUID(existing.payload["model_version_id"])
@@ -194,7 +206,8 @@ class LocalMediaTestJobs:
                                                    "confidence_threshold": threshold,
                                                    "installation_id": self.installation, "pid": os.getpid(),
                                                    "evaluation": model_version_id is not None,
-                                                   "model_status_at_request": model_record.status})
+                                                   "model_status_at_request": model_record.status,
+                                                   **({"cell_grid": grid_text} if grid_text is not None else {})})
             if not created:
                 if (job.job_type != "inference" or job.payload.get("input_sha256") != digest
                         or job.payload.get("modality") != modality):
@@ -234,7 +247,8 @@ class LocalMediaTestJobs:
             with self.factory() as session:
                 pipeline, loaded_version = load_approved_pipeline(
                     session, self.settings, pinned_model_id=model_record.id,
-                    inference_factory=self.inference_factory, allow_candidate=bool(job.payload.get("evaluation")))
+                    inference_factory=self.inference_factory, allow_candidate=bool(job.payload.get("evaluation")),
+                    cell_grid=grid)
             apply_confidence_threshold(pipeline, threshold)
             if modality == "video":
                 pipeline.preview_callback = lambda jpeg: self._publish_preview(job.id, jpeg)
@@ -307,6 +321,7 @@ class LocalMediaTestJobs:
                 "result_sync_error": job.payload.get("result_sync_error"),
                 "summary": job.payload.get("result_summary"),
                 "confidence_threshold": job.payload.get("confidence_threshold"),
+                "cell_grid": job.payload.get("cell_grid"),
                 "files": {role: f"/api/v1/jobs/{job.id}/results/{role}" for role in files}}
 
     def stop(self, job_id: UUID) -> dict[str, Any]:

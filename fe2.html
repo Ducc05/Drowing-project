@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="vi"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AquaGuard AI - Phân tích video</title>
+<!-- Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600;700&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<!-- Material Symbols Outlined -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS CDN with Plugins -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Tailwind Theme Configuration Verbatim -->
+<script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          "colors": {
+            "on-tertiary": "#68000a",
+            "surface": "#0f131c",
+            "error": "#ffb4ab",
+            "surface-container": "#1c1f29",
+            "tertiary": "#ffb3ad",
+            "surface-container-high": "#262a34",
+            "tertiary-fixed-dim": "#ffb3ad",
+            "surface-bright": "#353943",
+            "inverse-surface": "#dfe2ef",
+            "on-primary-fixed-variant": "#004395",
+            "on-secondary": "#003824",
+            "on-background": "#dfe2ef",
+            "outline-variant": "#424754",
+            "on-primary-fixed": "#001a42",
+            "primary-container": "#4d8eff",
+            "on-secondary-fixed": "#002113",
+            "on-primary-container": "#00285d",
+            "surface-dim": "#0f131c",
+            "tertiary-fixed": "#ffdad7",
+            "surface-tint": "#adc6ff",
+            "primary-fixed": "#d8e2ff",
+            "on-tertiary-container": "#5c0008",
+            "surface-container-highest": "#31353f",
+            "primary": "#adc6ff",
+            "on-secondary-container": "#00311f",
+            "background": "#0f131c",
+            "secondary-container": "#00a572",
+            "secondary": "#4edea3",
+            "on-secondary-fixed-variant": "#005236",
+            "secondary-fixed": "#6ffbbe",
+            "surface-variant": "#31353f",
+            "on-tertiary-fixed": "#410004",
+            "on-surface": "#dfe2ef",
+            "on-error-container": "#ffdad6",
+            "on-primary": "#002e6a",
+            "surface-container-lowest": "#0a0e17",
+            "on-surface-variant": "#c2c6d6",
+            "tertiary-container": "#ff5451",
+            "error-container": "#93000a",
+            "on-error": "#690005",
+            "inverse-primary": "#005ac2",
+            "on-tertiary-fixed-variant": "#930013",
+            "inverse-on-surface": "#2c303a",
+            "surface-container-low": "#181b25",
+            "outline": "#8c909f",
+            "secondary-fixed-dim": "#4edea3",
+            "primary-fixed-dim": "#adc6ff"
+          },
+          "borderRadius": {
+            "DEFAULT": "0.125rem",
+            "lg": "0.25rem",
+            "xl": "0.5rem",
+            "full": "0.75rem"
+          },
+          "spacing": {
+            "margin": "1rem",
+            "gutter": "1rem",
+            "margin-desktop": "1.5rem",
+            "space-xl": "2rem",
+            "gutter-desktop": "1.5rem",
+            "space-sm": "0.5rem",
+            "space-xs": "0.25rem",
+            "space-lg": "1.25rem",
+            "space-md": "0.75rem"
+          },
+          "fontFamily": {
+            "body-lg": ["Geist"],
+            "headline-lg": ["Space Grotesk"],
+            "label-md": ["JetBrains Mono"],
+            "headline-xl": ["Space Grotesk"],
+            "label-sm": ["JetBrains Mono"],
+            "headline-sm": ["Space Grotesk"],
+            "label-lg": ["JetBrains Mono"],
+            "body-md": ["Geist"],
+            "body-sm": ["Geist"],
+            "headline-xl-mobile": ["Space Grotesk"]
+          },
+          "fontSize": {
+            "body-lg": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+            "headline-lg": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+            "label-md": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+            "headline-xl": ["36px", { "lineHeight": "44px", "fontWeight": "700" }],
+            "label-sm": ["10px", { "lineHeight": "14px", "fontWeight": "600" }],
+            "headline-sm": ["18px", { "lineHeight": "24px", "fontWeight": "600" }],
+            "label-lg": ["14px", { "lineHeight": "20px", "fontWeight": "500" }],
+            "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+            "body-sm": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+            "headline-xl-mobile": ["28px", { "lineHeight": "36px", "fontWeight": "700" }]
+          }
+        }
+      }
+    }
+  </script>
+<style>
+    .material-symbols-outlined {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      display: inline-block;
+      vertical-align: middle;
+      line-height: 1;
+    }
+    /* Reticle radar visual corners */
+    .reticle-corner-tl { top: -2px; left: -2px; width: 8px; height: 8px; border-top: 2.5px solid currentColor; border-left: 2.5px solid currentColor; }
+    .reticle-corner-tr { top: -2px; right: -2px; width: 8px; height: 8px; border-top: 2.5px solid currentColor; border-right: 2.5px solid currentColor; }
+    .reticle-corner-bl { bottom: -2px; left: -2px; width: 8px; height: 8px; border-bottom: 2.5px solid currentColor; border-left: 2.5px solid currentColor; }
+    .reticle-corner-br { bottom: -2px; right: -2px; width: 8px; height: 8px; border-bottom: 2.5px solid currentColor; border-right: 2.5px solid currentColor; }
+  </style>
+</head>
+<body class="bg-background text-on-surface antialiased h-screen flex flex-col overflow-hidden select-none">
+<!-- ================= TOP APP BAR (Shared Components JSON Anchor) ================= -->
+<header class="flex justify-between items-center w-full px-space-md py-space-xs border-b border-outline-variant bg-surface-container-lowest z-50 shrink-0">
+<div class="flex items-center gap-space-lg">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-primary text-headline-lg" data-icon="waves">waves</span>
+<span class="text-headline-sm font-headline-sm tracking-wider uppercase text-primary font-bold">AquaGuard AI</span>
+</div>
+<!-- Mode Badge: Explicit non-live analytical mode -->
+<div class="flex items-center gap-space-xs px-space-sm py-0.5 rounded bg-surface-container-high border border-outline-variant">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="font-label-sm text-label-sm text-primary tracking-wide uppercase">Kết quả phân tích video</span>
+</div>
+<div class="px-space-xs py-0.5 rounded bg-surface-container border border-outline-variant text-on-surface-variant font-label-sm text-label-sm">
+        Bản ghi ngoại tuyến
+      </div>
+</div>
+<!-- Navigation links from JSON -->
+<nav class="hidden md:flex items-center gap-space-lg">
+<a class="text-on-surface-variant hover:text-on-surface transition-colors pb-1 font-body-md text-body-md" href="#">Giám sát trực tiếp</a>
+<a class="text-primary border-b-2 border-primary font-headline-sm pb-1 font-body-md text-body-md" href="#">Phân tích video</a>
+<a class="text-on-surface-variant hover:text-on-surface transition-colors pb-1 font-body-md text-body-md" href="#">Cấu hình cảnh báo</a>
+<a class="text-on-surface-variant hover:text-on-surface transition-colors pb-1 font-body-md text-body-md" href="#">Lịch sử sự kiện</a>
+</nav>
+<!-- Trailing Action Cluster -->
+<div class="flex items-center gap-space-md">
+<div class="flex items-center gap-space-xs px-space-sm py-1 rounded bg-surface-container-low border border-outline-variant font-label-md text-label-md text-on-surface-variant">
+<span class="material-symbols-outlined text-label-md" data-icon="badge">badge</span>
+<span>Ca trực: Đội A</span>
+</div>
+<button class="bg-tertiary-container text-on-tertiary-container font-headline-sm text-label-md px-space-md py-1.5 rounded flex items-center gap-space-xs transition-all duration-150 ease-in-out active:scale-95 shadow-sm">
+<span class="material-symbols-outlined text-label-md" data-icon="crisis_alert">crisis_alert</span>
+<span>Báo động khẩn cấp</span>
+</button>
+<div class="flex items-center gap-space-xs text-on-surface-variant">
+<button class="p-1.5 rounded hover:bg-surface-container hover:text-on-surface transition-colors" title="Thông báo">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="p-1.5 rounded hover:bg-surface-container hover:text-on-surface transition-colors" title="Cài đặt">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+</button>
+<button class="p-1.5 rounded hover:bg-surface-container hover:text-on-surface transition-colors" title="Bộ chỉnh tham số">
+<span class="material-symbols-outlined" data-icon="tune">tune</span>
+</button>
+</div>
+<div class="w-8 h-8 rounded-full bg-surface-container-high border border-outline-variant flex items-center justify-center overflow-hidden">
+<img alt="Chân dung kiểm soát viên ca trực" class="w-full h-full object-cover" data-alt="Chân dung kiểm soát viên ca trực trung tâm điều hành bể bơi với sắc thái tập trung cao độ, chiếu sáng công nghệ tương phản tông màu xanh thẫm và ánh sáng màn hình radar dịu nhẹ." src="https://lh3.googleusercontent.com/aida-public/AB6AXuBg06iGsJTyW9ZGnjXVbssbXFykcnF90Jc-9SNkip7xo1IMn48n7S54sLMI5mcO7DzTEZ6ocoWwKe5yrW5mbesQjjtBzekVwpEGRwFSogYZg_gcNb6ciN0yKjGVM6CK2Y5MCLgQxJ1EoSHRB7v2s822XeN74JRNjASVHFNInzU1kD_741VRRL4zlEZXZdlvX1xFhubosgAN8SyP58FU0eecz5kcTJquTnVh--h5LC0"/>
+</div>
+</div>
+</header>
+<!-- ================= MAIN LAYOUT WITH SIDENAV & DENSE SOC WORKSPACE ================= -->
+<div class="flex flex-1 overflow-hidden">
+<!-- SideNavBar (Shared Components JSON Anchor) -->
+<aside class="flex flex-col justify-between h-full w-64 border-r border-outline-variant bg-surface-container-low shrink-0 z-40 hidden lg:flex">
+<!-- Header Info -->
+<div class="p-space-md border-b border-outline-variant">
+<div class="flex items-center gap-space-sm">
+<div class="w-9 h-9 rounded bg-surface-container-high border border-outline-variant flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-headline-sm" data-icon="security">security</span>
+</div>
+<div>
+<h2 class="text-headline-sm font-headline-sm font-bold text-on-surface">AquaGuard Core</h2>
+<p class="font-label-sm text-label-sm text-secondary flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+              AI Engine: v4.2 Online
+            </p>
+</div>
+</div>
+</div>
+<!-- Navigation Tabs (JSON: tab_labels & tab_icons) -->
+<nav class="flex-1 py-space-sm space-y-0.5 overflow-y-auto">
+<!-- 1: Ma trận Camera -->
+<a class="flex items-center gap-space-sm text-on-surface-variant px-space-md py-space-sm font-label-lg text-label-lg hover:text-on-surface hover:bg-surface-container transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="videocam">videocam</span>
+<span>Ma trận Camera</span>
+</a>
+<!-- 2: Phân tích Video (Active: Intent matched) -->
+<a class="flex items-center gap-space-sm bg-surface-container-high text-primary border-l-2 border-primary px-space-md py-space-sm font-label-lg text-label-lg" href="#">
+<span class="material-symbols-outlined" data-icon="analytics">analytics</span>
+<span>Phân tích Video</span>
+</a>
+<!-- 3: Nhật ký Cảnh báo -->
+<a class="flex items-center gap-space-sm text-on-surface-variant px-space-md py-space-sm font-label-lg text-label-lg hover:text-on-surface hover:bg-surface-container transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="warning">warning</span>
+<span>Nhật ký Cảnh báo</span>
+</a>
+<!-- 4: Bản đồ Nhiệt SOC -->
+<a class="flex items-center gap-space-sm text-on-surface-variant px-space-md py-space-sm font-label-lg text-label-lg hover:text-on-surface hover:bg-surface-container transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="grid_view">grid_view</span>
+<span>Bản đồ Nhiệt SOC</span>
+</a>
+<!-- 5: Thiết lập Tham số -->
+<a class="flex items-center gap-space-sm text-on-surface-variant px-space-md py-space-sm font-label-lg text-label-lg hover:text-on-surface hover:bg-surface-container transition-colors" href="#">
+<span class="material-symbols-outlined" data-icon="tune">tune</span>
+<span>Thiết lập Tham số</span>
+</a>
+<!-- Call to Action JSON Key -->
+<div class="pt-space-md px-space-md">
+<button class="w-full bg-surface-container-highest hover:bg-surface-container-high border border-outline-variant text-tertiary-container font-label-md text-label-md py-2 px-space-sm rounded flex items-center justify-center gap-space-xs transition-all active:scale-98">
+<span class="material-symbols-outlined text-label-md" data-icon="campaign">campaign</span>
+<span>Kích hoạt Báo động</span>
+</button>
+</div>
+</nav>
+<!-- Footer Tabs (JSON) -->
+<div class="p-space-sm border-t border-outline-variant bg-surface-container-lowest space-y-1">
+<a class="flex items-center gap-space-sm text-on-surface-variant hover:text-on-surface px-space-sm py-1.5 rounded font-label-sm text-label-sm transition-colors" href="#">
+<span class="material-symbols-outlined text-label-md" data-icon="sensors">sensors</span>
+<span>Chẩn đoán Camera</span>
+</a>
+<a class="flex items-center gap-space-sm text-on-surface-variant hover:text-on-surface px-space-sm py-1.5 rounded font-label-sm text-label-sm transition-colors" href="#">
+<span class="material-symbols-outlined text-label-md" data-icon="help_center">help_center</span>
+<span>Tài liệu SOC</span>
+</a>
+</div>
+</aside>
+<!-- ================= MAIN CONTENT CANVAS ================= -->
+<main class="flex-1 flex flex-col overflow-y-auto bg-surface">
+<!-- TOP ACTION BAR: FILE MANAGEMENT & EXPORT -->
+<section class="border-b border-outline-variant bg-surface-container-low px-space-lg py-space-sm flex flex-wrap items-center justify-between gap-space-md shrink-0">
+<div class="flex items-center gap-space-md">
+<div class="w-10 h-10 rounded bg-surface-container border border-outline-variant flex items-center justify-center text-primary shrink-0">
+<span class="material-symbols-outlined" data-icon="movie">movie</span>
+</div>
+<div>
+<div class="flex items-center gap-space-sm">
+<span class="font-label-lg text-label-lg font-bold text-on-surface">video_be_boi_khu_a_20250512.mp4</span>
+<span class="font-label-sm text-label-sm text-secondary bg-surface-container px-1.5 py-0.5 rounded border border-outline-variant">450 MB</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded border border-outline-variant">1080p · 60fps</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Bể bơi tiêu chuẩn Khu A · Lưu trữ server cục bộ SOC · Trạng thái nhận diện: <span class="text-secondary font-medium">Hoàn tất</span></p>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="flex items-center flex-wrap gap-space-sm">
+<button class="bg-primary text-on-primary font-label-md text-label-md px-space-md py-1.5 rounded flex items-center gap-space-xs hover:bg-surface-tint transition-all active:scale-95 shadow-sm">
+<span class="material-symbols-outlined text-label-md" data-icon="cloud_upload">cloud_upload</span>
+<span>Tải video mới</span>
+</button>
+<button class="bg-surface-container-high border border-outline-variant text-on-surface hover:bg-surface-bright font-label-md text-label-md px-space-md py-1.5 rounded flex items-center gap-space-xs transition-all active:scale-95">
+<span class="material-symbols-outlined text-label-md" data-icon="picture_as_pdf">picture_as_pdf</span>
+<span>Xuất báo cáo PDF</span>
+</button>
+<button class="bg-surface-container-high border border-outline-variant text-on-surface hover:bg-surface-bright font-label-md text-label-md px-space-md py-1.5 rounded flex items-center gap-space-xs transition-all active:scale-95">
+<span class="material-symbols-outlined text-label-md" data-icon="data_object">data_object</span>
+<span>Tải dữ liệu nhận diện JSON/CSV</span>
+</button>
+</div>
+</section>
+<!-- METRIC CARDS (4 CARDS + TECHNICAL NOTE) -->
+<section class="p-space-md border-b border-outline-variant bg-surface-container-lowest shrink-0">
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-space-md">
+<!-- Metric 1 -->
+<div class="p-space-md rounded bg-surface-container-low border border-outline-variant flex flex-col justify-between">
+<div class="flex items-center justify-between text-on-surface-variant">
+<span class="font-body-sm text-body-sm">Thời lượng video</span>
+<span class="material-symbols-outlined text-label-lg" data-icon="schedule">schedule</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<span class="font-label-lg text-headline-lg font-bold text-on-surface">15:00</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">phút:giây</span>
+</div>
+</div>
+<!-- Metric 2 -->
+<div class="p-space-md rounded bg-surface-container-low border border-outline-variant flex flex-col justify-between">
+<div class="flex items-center justify-between text-on-surface-variant">
+<span class="font-body-sm text-body-sm">Thời lượng đã phân tích</span>
+<span class="material-symbols-outlined text-label-lg text-secondary" data-icon="check_circle">check_circle</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<span class="font-label-lg text-headline-lg font-bold text-secondary">15:00</span>
+<span class="font-label-sm text-label-sm text-secondary bg-surface-container px-1 rounded border border-outline-variant">100% Hoàn thành</span>
+</div>
+</div>
+<!-- Metric 3 -->
+<div class="p-space-md rounded bg-surface-container-low border border-outline-variant flex flex-col justify-between">
+<div class="flex items-center justify-between text-on-surface-variant">
+<span class="font-body-sm text-body-sm">Số đoạn phát hiện drowning</span>
+<span class="material-symbols-outlined text-label-lg text-tertiary-container" data-icon="warning">warning</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<span class="font-label-lg text-headline-lg font-bold text-tertiary-container">2 đoạn</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">(khoảng nghi vấn)</span>
+</div>
+</div>
+<!-- Metric 4 -->
+<div class="p-space-md rounded bg-surface-container-low border border-outline-variant flex flex-col justify-between">
+<div class="flex items-center justify-between text-on-surface-variant">
+<span class="font-body-sm text-body-sm">Tổng thời lượng drowning</span>
+<span class="material-symbols-outlined text-label-lg text-tertiary" data-icon="timelapse">timelapse</span>
+</div>
+<div class="mt-2 flex items-baseline gap-2">
+<span class="font-label-lg text-headline-lg font-bold text-tertiary-container">00:48</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">(hợp khoảng, trừ trùng)</span>
+</div>
+</div>
+</div>
+<!-- Technical Note Required by Policy -->
+<div class="mt-space-sm px-space-md py-1.5 bg-surface-container-low border border-outline-variant rounded flex items-center justify-between">
+<div class="flex items-center gap-space-xs text-on-surface-variant font-label-sm text-label-sm">
+<span class="material-symbols-outlined text-primary text-label-md" data-icon="info">info</span>
+<span>Ghi chú kỹ thuật: Không cộng dồn số lượt phát hiện qua từng khung hình thành tổng số người. Tổng thời lượng được tính theo hợp khoảng thời gian thực tế đã loại trừ trùng lặp.</span>
+</div>
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase">Computer Vision Engine 4.2</span>
+</div>
+</section>
+<!-- 2-COLUMN MAIN ANALYTICS WORKSPACE -->
+<div class="flex-1 grid grid-cols-1 xl:grid-cols-12 gap-space-md p-space-md overflow-hidden min-h-0">
+<!-- ================= LEFT COLUMN: VIDEO PLAYER & TIMELINE (65% / 8 cols) ================= -->
+<section class="xl:col-span-8 flex flex-col h-full bg-surface-container-low rounded border border-outline-variant overflow-hidden">
+<!-- Top bar inside player panel -->
+<div class="px-space-md py-space-xs border-b border-outline-variant bg-surface-container flex items-center justify-between">
+<div class="flex items-center gap-space-sm">
+<span class="material-symbols-outlined text-primary text-label-md" data-icon="smart_display">smart_display</span>
+<span class="font-headline-sm text-body-md text-on-surface font-semibold">Khung phân tích &amp; Nhận diện Bounding Box</span>
+<span class="font-label-sm text-label-sm text-on-surface-variant">| Mốc hiển thị: 04:22 / 15:00</span>
+</div>
+<!-- Watermark simulated badge -->
+<div class="px-space-sm py-0.5 rounded bg-surface-container-highest border border-outline-variant text-tertiary font-label-sm text-label-sm tracking-widest uppercase">
+              Dữ liệu mô phỏng
+            </div>
+</div>
+<!-- Video Display Canvas with Bounding Boxes -->
+<div class="relative flex-1 bg-surface-container-lowest flex items-center justify-center overflow-hidden min-h-[360px]">
+<!-- Pool Video Background Placeholder -->
+<img alt="Video bể bơi đang phân tích" class="absolute inset-0 w-full h-full object-cover opacity-80" data-alt="Góc nhìn camera quan sát an ninh từ trên cao nhìn xuống toàn cảnh bể bơi trong nhà thi đấu hiện đại. Làn nước xanh ngọc sâu thẳm phản chiếu dải đèn LED công nghiệp trên trần. Người bơi rải rác trên các làn nước với đường phao phân làn rõ ràng và huấn luyện viên đứng trên bờ quan sát." src="https://lh3.googleusercontent.com/aida-public/AB6AXuB2h6ZhVxA4x0kxPJeBr9y-Kr2CYYneVSaaitVJ--w_EZLmhQViUYK8B03As18ZWCaty6rysnXoT28HsQ7dxpobx_P-OyDf2GTJtXYih5lbhIxjmTzbZrrXcdDkVV2oDcC2hKx2MM3gjTwNsa14KGJebeTHAWi3GrV6nFn_Dl8J238yim1drwzT1CqRyZNE3iepsThLgRYvqQztOaXpivDl5Ujfu90NmYR--6CbTkc"/>
+<!-- Deep Marine Ambient Overlay Grid -->
+<div class="absolute inset-0 bg-surface/30 pointer-events-none"></div>
+<!-- WATERMARK OVERLAY -->
+<div class="absolute top-4 left-4 z-20 pointer-events-none flex flex-col gap-1">
+<div class="px-2 py-1 rounded bg-surface-container-lowest/80 border border-outline-variant backdrop-blur font-label-sm text-label-sm text-primary flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-primary animate-ping"></span>
+<span>CHẾ ĐỘ PHÂN TÍCH OFFLINE · KHÔNG PHẢI REALTIME</span>
+</div>
+<div class="px-2 py-0.5 rounded bg-surface-container-lowest/80 border border-outline-variant font-label-sm text-label-sm text-on-surface-variant">
+                CAM_01 · BỂ BƠI KHU A (DEEP END)
+              </div>
+</div>
+<!-- SIMULATION WATERMARK STAMP -->
+<div class="absolute top-4 right-4 z-20 pointer-events-none px-3 py-1 bg-surface-container-lowest/90 border border-tertiary/60 rounded text-tertiary font-label-md text-label-md tracking-widest font-bold uppercase shadow-lg">
+              DỮ LIỆU MÔ PHỎNG
+            </div>
+<!-- ================= BOUNDING BOXES OVERLAY AT MỐC 04:22 ================= -->
+<!-- BOX 1: RED (drowning · 0.94) at Center of Pool -->
+<div class="absolute left-[45%] top-[42%] w-[130px] h-[110px] border-2 border-tertiary-container z-30 transition-all pointer-events-auto">
+<!-- Radar Reticles -->
+<span class="absolute reticle-corner-tl text-tertiary-container"></span>
+<span class="absolute reticle-corner-tr text-tertiary-container"></span>
+<span class="absolute reticle-corner-bl text-tertiary-container"></span>
+<span class="absolute reticle-corner-br text-tertiary-container"></span>
+<!-- Tag on Top Edge -->
+<div class="absolute -top-7 left-0 bg-tertiary-container text-on-tertiary-container px-1.5 py-0.5 font-label-sm text-label-sm whitespace-nowrap rounded-t font-semibold flex items-center gap-1 shadow-md">
+<span class="material-symbols-outlined text-label-sm" data-icon="report">report</span>
+<span>[ID: #084] [drowning · 0.94]</span>
+</div>
+<!-- Mini telemetry metrics -->
+<div class="absolute -bottom-5 left-0 bg-surface-container-lowest/90 border border-tertiary-container/50 px-1 font-label-sm text-[9px] text-tertiary flex items-center gap-1">
+<span>CHÌM: 14s</span>
+<span>· VẬN TỐC: 0.0m/s</span>
+</div>
+</div>
+<!-- BOX 2: GREEN 1 (swimming · 0.98) Adjacent Lane -->
+<div class="absolute left-[20%] top-[30%] w-[150px] h-[75px] border border-secondary z-30 pointer-events-auto">
+<span class="absolute reticle-corner-tl text-secondary"></span>
+<span class="absolute reticle-corner-tr text-secondary"></span>
+<span class="absolute reticle-corner-bl text-secondary"></span>
+<span class="absolute reticle-corner-br text-secondary"></span>
+<div class="absolute -top-6 left-0 bg-secondary text-on-secondary px-1.5 py-0.5 font-label-sm text-label-sm whitespace-nowrap rounded-t font-medium">
+                [ID: #102] [swimming · 0.98]
+              </div>
+</div>
+<!-- BOX 2B: GREEN 2 (swimming · 0.96) Adjacent Lane Farther -->
+<div class="absolute left-[18%] top-[55%] w-[140px] h-[80px] border border-secondary z-30 pointer-events-auto">
+<span class="absolute reticle-corner-tl text-secondary"></span>
+<span class="absolute reticle-corner-tr text-secondary"></span>
+<span class="absolute reticle-corner-bl text-secondary"></span>
+<span class="absolute reticle-corner-br text-secondary"></span>
+<div class="absolute -top-6 left-0 bg-secondary text-on-secondary px-1.5 py-0.5 font-label-sm text-label-sm whitespace-nowrap rounded-t font-medium">
+                [ID: #105] [swimming · 0.96]
+              </div>
+</div>
+<!-- BOX 3: BLUE (out of water · 0.92) Lifeguard / Coach on Deck -->
+<div class="absolute right-[14%] top-[18%] w-[85px] h-[170px] border border-primary-container z-30 pointer-events-auto">
+<span class="absolute reticle-corner-tl text-primary-container"></span>
+<span class="absolute reticle-corner-tr text-primary-container"></span>
+<span class="absolute reticle-corner-bl text-primary-container"></span>
+<span class="absolute reticle-corner-br text-primary-container"></span>
+<div class="absolute -top-6 left-0 bg-primary-container text-on-primary-container px-1.5 py-0.5 font-label-sm text-label-sm whitespace-nowrap rounded-t font-medium">
+                [ID: #019] [out of water · 0.92]
+              </div>
+</div>
+<!-- Center Reticle Visual Target -->
+<div class="w-12 h-12 rounded-full border border-primary/20 pointer-events-none flex items-center justify-center">
+<div class="w-2 h-2 rounded-full bg-primary/40"></div>
+</div>
+</div>
+<!-- PLAYER CONTROLS & TOGGLES -->
+<div class="p-space-md bg-surface-container-high border-t border-outline-variant flex flex-col gap-space-sm shrink-0">
+<!-- Controls row -->
+<div class="flex flex-wrap items-center justify-between gap-space-sm">
+<!-- Playback Transport -->
+<div class="flex items-center gap-space-xs">
+<button class="p-1.5 rounded hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Tua lùi 5 giây">
+<span class="material-symbols-outlined" data-icon="replay_5">replay_5</span>
+</button>
+<button class="w-9 h-9 rounded bg-primary text-on-primary flex items-center justify-center hover:bg-surface-tint transition-all active:scale-95 shadow-sm" title="Tạm dừng">
+<span class="material-symbols-outlined" data-icon="pause">pause</span>
+</button>
+<button class="p-1.5 rounded hover:bg-surface-container text-on-surface-variant hover:text-on-surface transition-colors" title="Tua tới 5 giây">
+<span class="material-symbols-outlined" data-icon="forward_5">forward_5</span>
+</button>
+<!-- Speed control -->
+<div class="ml-2 flex items-center bg-surface-container border border-outline-variant rounded p-0.5">
+<button class="px-2 py-0.5 font-label-sm text-label-sm rounded bg-primary text-on-primary font-bold">1x</button>
+<button class="px-2 py-0.5 font-label-sm text-label-sm rounded text-on-surface-variant hover:text-on-surface">2x</button>
+</div>
+<span class="ml-3 font-label-md text-label-md text-on-surface">04:22 <span class="text-on-surface-variant">/ 15:00</span></span>
+</div>
+<!-- Computer Vision Layer Toggles -->
+<div class="flex items-center gap-space-md">
+<!-- Toggle 1: Bật/Tắt Bounding Box -->
+<label class="flex items-center gap-2 cursor-pointer font-body-sm text-body-sm text-on-surface">
+<input checked="" class="rounded border-outline-variant text-primary focus:ring-primary bg-surface-container" type="checkbox"/>
+<span>Bật Bounding Box</span>
+</label>
+<!-- Toggle 2: Hiển thị mã ID -->
+<label class="flex items-center gap-2 cursor-pointer font-body-sm text-body-sm text-on-surface">
+<input checked="" class="rounded border-outline-variant text-primary focus:ring-primary bg-surface-container" type="checkbox"/>
+<span>Hiển thị mã ID</span>
+</label>
+</div>
+<!-- Color Legend -->
+<div class="flex items-center gap-space-sm font-label-sm text-label-sm bg-surface-container px-space-sm py-1 rounded border border-outline-variant">
+<span class="flex items-center gap-1 text-tertiary">
+<span class="w-2 h-2 rounded-full bg-tertiary-container"></span> drowning
+                </span>
+<span class="text-outline-variant">|</span>
+<span class="flex items-center gap-1 text-secondary">
+<span class="w-2 h-2 rounded-full bg-secondary"></span> swimming
+                </span>
+<span class="text-outline-variant">|</span>
+<span class="flex items-center gap-1 text-primary">
+<span class="w-2 h-2 rounded-full bg-primary-container"></span> out of water
+                </span>
+</div>
+</div>
+<!-- VISUAL TIMELINE WITH DROWNING INTERVAL MARKERS -->
+<div class="pt-space-xs">
+<div class="flex justify-between font-label-sm text-label-sm text-on-surface-variant mb-1">
+<span>00:00</span>
+<span class="text-tertiary">Khoảng 1 (04:12 - 04:38)</span>
+<span class="text-tertiary">Khoảng 2 (09:15 - 09:37)</span>
+<span>15:00</span>
+</div>
+<!-- Interactive Timeline Scrubber Container -->
+<div class="relative w-full h-7 bg-surface-container-lowest rounded border border-outline-variant flex items-center cursor-pointer px-1">
+<!-- Background track bar -->
+<div class="absolute left-0 right-0 h-2 bg-surface-container-high rounded mx-2"></div>
+<!-- DROWNING INTERVAL 1: 04:12 - 04:38 (28% to 31%) -->
+<div class="absolute left-[28%] w-[4%] h-5 bg-tertiary-container/90 rounded border border-tertiary flex items-center justify-center cursor-pointer hover:brightness-125 transition-all shadow-sm" title="Khoảng 1: 04:12 - 04:38 (Đuối nước nghi vấn)">
+<span class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+</div>
+<!-- DROWNING INTERVAL 2: 09:15 - 09:37 (61.6% to 64.1%) -->
+<div class="absolute left-[61.6%] w-[3.5%] h-5 bg-tertiary-container/90 rounded border border-tertiary flex items-center justify-center cursor-pointer hover:brightness-125 transition-all shadow-sm" title="Khoảng 2: 09:15 - 09:37 (Đuối nước nghi vấn)">
+<span class="w-1.5 h-1.5 rounded-full bg-white"></span>
+</div>
+<!-- Current Playhead Scrubber at 04:22 (~29.1%) -->
+<div class="absolute left-[29.1%] top-0 bottom-0 w-1 bg-primary z-40">
+<div class="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-primary border-2 border-surface flex items-center justify-center shadow">
+<div class="w-1 h-1 rounded-full bg-surface-container-lowest"></div>
+</div>
+<!-- Tooltip -->
+<div class="absolute -bottom-5 -left-4 px-1 rounded bg-surface-container-highest font-label-sm text-[9px] text-primary whitespace-nowrap border border-outline-variant">
+                    04:22
+                  </div>
+</div>
+</div>
+<p class="mt-1 font-label-sm text-[11px] text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]" data-icon="ads_click">ads_click</span>
+                Nhấp trực tiếp vào dải đỏ trên thanh thời gian để tua ngay tới mốc phát hiện drowning cần thẩm định.
+              </p>
+</div>
+</div>
+</section>
+<!-- ================= RIGHT COLUMN: LABELS FILTER & DROWNING EVENTS LIST (35% / 4 cols) ================= -->
+<section class="xl:col-span-4 flex flex-col h-full bg-surface-container-low rounded border border-outline-variant overflow-hidden">
+<!-- Header with Filter Tabs -->
+<div class="p-space-md border-b border-outline-variant bg-surface-container shrink-0">
+<div class="flex items-center justify-between mb-space-sm">
+<h3 class="font-headline-sm text-body-lg font-bold text-on-surface flex items-center gap-space-xs">
+<span class="material-symbols-outlined text-tertiary" data-icon="crisis_alert">crisis_alert</span>
+<span>Danh sách đoạn phát hiện</span>
+</h3>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-tertiary-container/30 text-tertiary border border-tertiary/40">
+                2 Sự kiện
+              </span>
+</div>
+<!-- Filter Buttons Required: [Tất cả] | [Chỉ drowning (2)] | [swimming] | [out of water] -->
+<div class="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap">
+<button class="px-space-sm py-1 rounded font-label-sm text-label-sm bg-surface-container-high text-on-surface-variant hover:text-on-surface border border-outline-variant">
+                Tất cả
+              </button>
+<button class="px-space-sm py-1 rounded font-label-sm text-label-sm bg-tertiary-container text-on-tertiary-container font-semibold border border-tertiary">
+                Chỉ drowning (2)
+              </button>
+<button class="px-space-sm py-1 rounded font-label-sm text-label-sm bg-surface-container-high text-secondary hover:brightness-110 border border-outline-variant">
+                swimming
+              </button>
+<button class="px-space-sm py-1 rounded font-label-sm text-label-sm bg-surface-container-high text-primary hover:brightness-110 border border-outline-variant">
+                out of water
+              </button>
+</div>
+</div>
+<!-- Event Stream List Container -->
+<div class="flex-1 p-space-md overflow-y-auto space-y-space-md">
+<!-- ================= CARD ĐOẠN 1: 04:12 - 04:38 ================= -->
+<div class="rounded bg-surface-container border-2 border-tertiary-container p-space-md flex flex-col gap-space-sm shadow-md">
+<!-- Card Head -->
+<div class="flex items-start justify-between">
+<div>
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-tertiary-container animate-pulse"></span>
+<span class="font-headline-sm text-body-md font-bold text-tertiary">Đoạn 1: 04:12 - 04:38</span>
+</div>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-0.5">Thời lượng: 26 giây · Vị trí: Giữa bể làn 3</p>
+</div>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-tertiary-container text-on-tertiary-container font-bold">
+                  drowning
+                </span>
+</div>
+<!-- Thumbnail with Red Bounding Box -->
+<div class="relative h-28 w-full rounded bg-surface-container-lowest overflow-hidden border border-outline-variant">
+<img alt="Thumbnail sự kiện 1" class="w-full h-full object-cover" data-alt="Ảnh thu nhỏ cận cảnh góc quay camera khu vực giữa làn bể bơi số 3 ghi nhận người đang vùng vẫy dưới nước, có khung nhận diện hình chữ nhật màu đỏ bao quanh đối tượng với chỉ số AI cảnh báo nguy hiểm." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDy3PXwyajhvdwhGA_hNyD-jex4E7eftYoM6zKkCrty1qP-SW3kn3AlxGIuR3J0YbdK6thGuUcBr6t0BwnEs428W4lBq904teRUf-YhjL1-NfZodxjqer9_xCCbod3qVLXsYy3cfsMEIt2XZKk8iHRXxriImhvizp4gEskDtbw0jHPOIsuR0fd0ZaY82uTZ63efqAMrDqohSc1jvLkbwtTFRP7_iXW51XQC-lejPTc"/>
+<!-- Overlay bounding box box on thumb -->
+<div class="absolute inset-x-12 inset-y-3 border-2 border-tertiary-container rounded-sm flex items-start justify-end p-0.5 bg-tertiary-container/10">
+<span class="font-label-sm text-[9px] bg-tertiary-container text-white px-1 font-mono">0.94</span>
+</div>
+<div class="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-surface-container-lowest/90 font-label-sm text-[10px] text-tertiary flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]" data-icon="videocam">videocam</span> 04:12:08
+                </div>
+</div>
+<!-- AI Inference Metrics -->
+<div class="p-2 rounded bg-surface-container-low border border-outline-variant">
+<div class="flex justify-between items-center text-label-sm font-label-sm">
+<span class="text-on-surface-variant">Nhãn AI:</span>
+<span class="font-bold text-tertiary">[drowning · điểm tin cậy cao nhất 0.94]</span>
+</div>
+<!-- Mini confidence bar -->
+<div class="w-full bg-surface-container h-1.5 rounded mt-1.5 overflow-hidden">
+<div class="bg-tertiary-container h-full w-[94%]"></div>
+</div>
+</div>
+<!-- Staff Verification Dropdown (Distinct from AI Label) -->
+<div class="border-t border-outline-variant pt-2 flex flex-col gap-1">
+<div class="flex items-center justify-between">
+<label class="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]" data-icon="verified_user">verified_user</span>
+                    Xác minh của nhân viên:
+                  </label>
+<span class="font-label-sm text-[10px] text-secondary">Đã lưu</span>
+</div>
+<select class="w-full bg-surface-container-high border border-outline-variant rounded font-body-sm text-body-sm text-on-surface py-1.5 px-2 focus:ring-primary focus:border-primary">
+<option selected="" value="can_ho_tro">Có tình huống cần hỗ trợ</option>
+<option value="bao_dong_gia">Báo động giả</option>
+<option value="chua_du_tt">Chưa đủ thông tin</option>
+</select>
+</div>
+<!-- Action buttons -->
+<div class="grid grid-cols-2 gap-space-xs pt-1">
+<button class="bg-primary text-on-primary font-label-sm text-label-sm py-1.5 px-2 rounded flex items-center justify-center gap-1 hover:bg-surface-tint transition-all active:scale-95">
+<span class="material-symbols-outlined text-label-md" data-icon="play_circle">play_circle</span>
+<span>Tua đến đoạn này</span>
+</button>
+<button class="bg-surface-container-high border border-outline-variant text-on-surface font-label-sm text-label-sm py-1.5 px-2 rounded flex items-center justify-center gap-1 hover:bg-surface-bright transition-all">
+<span class="material-symbols-outlined text-label-md" data-icon="open_in_new">open_in_new</span>
+<span>Xem chi tiết</span>
+</button>
+</div>
+</div>
+<!-- ================= CARD ĐOẠN 2: 09:15 - 09:37 ================= -->
+<div class="rounded bg-surface-container border border-outline-variant p-space-md flex flex-col gap-space-sm hover:border-tertiary/60 transition-colors">
+<!-- Card Head -->
+<div class="flex items-start justify-between">
+<div>
+<div class="flex items-center gap-space-xs">
+<span class="w-2.5 h-2.5 rounded-full bg-tertiary-container"></span>
+<span class="font-headline-sm text-body-md font-bold text-on-surface">Đoạn 2: 09:15 - 09:37</span>
+</div>
+<p class="font-label-sm text-label-sm text-on-surface-variant mt-0.5">Thời lượng: 22 giây · Vị trí: Góc sâu bờ trái</p>
+</div>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-tertiary-container/20 text-tertiary border border-tertiary/30 font-bold">
+                  drowning
+                </span>
+</div>
+<!-- Thumbnail with Red Bounding Box -->
+<div class="relative h-28 w-full rounded bg-surface-container-lowest overflow-hidden border border-outline-variant">
+<img alt="Thumbnail sự kiện 2" class="w-full h-full object-cover" data-alt="Hình ảnh thu nhỏ camera quan sát ghi lại khoảnh khắc vùng nước tĩnh ở góc sâu bể bơi với bóng người lặn sâu dưới mặt nước kèm theo khung nhận diện màu đỏ nhấp nháy phát hiện dấu hiệu bất thường." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDCtrV57lL2i-R2zQCTDVEYbx67ymwdPnOp6tcnwsO6_e4MMAYek7-DxJulCETwdFIfMgEiJ1RnbC9KH-gn4Uk60uS-4pSSUQCVtM8XtzS085jxcax3yTDrfrESMHNw1q1m7OhXfecD_hDRBSSvbUknV1iZEO2nC6FO89Pq1MisbZWDoqi7xCdbT3VcdghYkvhIiUfiFAp4mU_yXWt6UeLi-mtz6rCh9znvQHEbvVo"/>
+<!-- Bounding Box Overlay -->
+<div class="absolute left-8 top-4 w-24 h-16 border-2 border-tertiary-container rounded-sm bg-tertiary-container/10 flex items-start justify-end p-0.5">
+<span class="font-label-sm text-[9px] bg-tertiary-container text-white px-1 font-mono">0.89</span>
+</div>
+<div class="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-surface-container-lowest/90 font-label-sm text-[10px] text-tertiary flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]" data-icon="videocam">videocam</span> 09:15:30
+                </div>
+</div>
+<!-- AI Inference Metrics -->
+<div class="p-2 rounded bg-surface-container-low border border-outline-variant">
+<div class="flex justify-between items-center text-label-sm font-label-sm">
+<span class="text-on-surface-variant">Nhãn AI:</span>
+<span class="font-bold text-tertiary">[drowning · điểm tin cậy cao nhất 0.89]</span>
+</div>
+<!-- Mini confidence bar -->
+<div class="w-full bg-surface-container h-1.5 rounded mt-1.5 overflow-hidden">
+<div class="bg-tertiary-container h-full w-[89%]"></div>
+</div>
+</div>
+<!-- Staff Verification Dropdown -->
+<div class="border-t border-outline-variant pt-2 flex flex-col gap-1">
+<div class="flex items-center justify-between">
+<label class="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]" data-icon="pending">pending</span>
+                    Xác minh của nhân viên:
+                  </label>
+<span class="font-label-sm text-[10px] text-tertiary bg-surface-container-lowest px-1 rounded border border-outline-variant">Chưa xác minh</span>
+</div>
+<select class="w-full bg-surface-container-high border border-outline-variant rounded font-body-sm text-body-sm text-on-surface-variant py-1.5 px-2 focus:ring-primary focus:border-primary">
+<option selected="" value="chua_xac_minh">Chưa xác minh</option>
+<option value="can_ho_tro">Có tình huống cần hỗ trợ</option>
+<option value="bao_dong_gia">Báo động giả</option>
+<option value="chua_du_tt">Chưa đủ thông tin</option>
+</select>
+</div>
+<!-- Action buttons -->
+<div class="grid grid-cols-2 gap-space-xs pt-1">
+<button class="bg-surface-container-high border border-outline-variant text-on-surface font-label-sm text-label-sm py-1.5 px-2 rounded flex items-center justify-center gap-1 hover:bg-surface-bright transition-all active:scale-95">
+<span class="material-symbols-outlined text-label-md" data-icon="play_circle">play_circle</span>
+<span>Tua đến đoạn này</span>
+</button>
+<button class="bg-surface-container-high border border-outline-variant text-on-surface font-label-sm text-label-sm py-1.5 px-2 rounded flex items-center justify-center gap-1 hover:bg-surface-bright transition-all">
+<span class="material-symbols-outlined text-label-md" data-icon="open_in_new">open_in_new</span>
+<span>Xem chi tiết</span>
+</button>
+</div>
+</div>
+<!-- STANDARD EMPTY STATE FALLBACK TEMPLATE (Required message compliant) -->
+<div class="p-space-md rounded bg-surface-container-low border border-dashed border-outline-variant text-center flex flex-col items-center justify-center gap-1">
+<span class="material-symbols-outlined text-secondary text-headline-sm" data-icon="verified">verified</span>
+<p class="font-body-md text-body-md text-on-surface font-medium">Chưa ghi nhận dấu hiệu đuối nước</p>
+<p class="font-label-sm text-label-sm text-on-surface-variant">
+                Thông điệp hiển thị chuẩn mực khi rà soát khung hình không phát hiện biến cố nguy hiểm.
+              </p>
+</div>
+</div>
+<!-- Bottom Footer Status -->
+<div class="p-space-sm border-t border-outline-variant bg-surface-container-lowest flex items-center justify-between text-label-sm font-label-sm text-on-surface-variant shrink-0">
+<span class="flex items-center gap-1">
+<span class="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+              Phân tách độc lập: AI Tag ≠ Xác minh nhân viên
+            </span>
+<span>2 / 2 Đoạn</span>
+</div>
+</section>
+</div>
+</main>
+</div>
+</body></html>

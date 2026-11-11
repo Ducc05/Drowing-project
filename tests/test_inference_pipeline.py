@@ -145,6 +145,36 @@ class InferencePipelineTests(unittest.TestCase):
             self.assertEqual(reports[-1]["eta_s"], 0)
 
     @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test video plumbing")
+    def test_video_progress_and_result_report_processing_fps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "input.avi"
+            writer = cv2.VideoWriter(str(source), cv2.VideoWriter_fourcc(*"MJPG"), 10, (32, 32))
+            for _ in range(10): writer.write(__import__("numpy").zeros((32, 32, 3), dtype="uint8"))
+            writer.release()
+            pipeline = PersonStateInference(FakeClassifier(), approved_test_manifest(), CountingPersonDetector(),
+                                             model_version="candidate-v1", input_size=32)
+            reports = []
+            result = pipeline.infer_video(source, root / "result.webm", frame_stride=3, progress=reports.append)
+            self.assertIn("fps", reports[-1])
+            last = reports[-1]
+            self.assertGreater(last["fps"], 0)
+            # elapsed_s is rounded to 0.01 s, fps uses the exact elapsed time: allow that rounding error either way
+            self.assertGreaterEqual(last["fps"], last["processed"] / (last["elapsed_s"] + 0.005) - 0.1)
+            self.assertLessEqual(last["fps"], last["processed"] / max(last["elapsed_s"] - 0.005, 1e-6) + 0.1)
+            self.assertGreater(result["processing_fps"], 0)
+            self.assertGreaterEqual(result["elapsed_s"], 0)
+            self.assertEqual(result["fps_metadata"], 10)
+
+    @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test video plumbing")
+    def test_fps_is_none_without_elapsed_time(self):
+        from drowning.inference.pipeline import processing_fps
+        self.assertIsNone(processing_fps(0, 0))
+        self.assertIsNone(processing_fps(5, 0))
+        self.assertIsNone(processing_fps(0, 2.0))
+        self.assertEqual(processing_fps(20, 4.0), 5.0)
+
+    @unittest.skipIf(cv2 is None or torch is None, "install optional vision and ML dependencies to test video plumbing")
     def test_overlay_copies_playable_source_without_creating_encoded_video(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -29,7 +29,7 @@ export const trackName = (trackId: string) => trackId.replace('trk-', '#')
 
 export type Detection = {
   label_mode?: "alarm" | "all"; track_id: string; timestamp_ms: number; frame_index: number; bbox_xyxy: number[]; label: Label | null; class_scores: number[] | null; prediction_branch: string; detector_confidence?: number; alert?: boolean }
-export type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; max_gap_ms?: number; render?: 'overlay' | 'video'; confidence_threshold?: number | null }
+export type VideoSummary = { detection_count?: number; frame_count?: number; processed_frames?: number; frame_stride?: number; width?: number; height?: number; fps_metadata?: number; processing_fps?: number | null; elapsed_s?: number; max_gap_ms?: number; render?: 'overlay' | 'video'; confidence_threshold?: number | null }
 
 /** The score a box is judged by: detector confidence, else the predicted label's score (same rule as the API). */
 export function boxScore(row: { detector_confidence?: number | null; label: Label | null; class_scores: number[] | null }): number | null {

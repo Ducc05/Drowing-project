@@ -52,6 +52,10 @@ local-cache/
 *.log
 notebooks/kernels/*/jobs/
 
+DrowningProject/
+
+gui-cho-ban/
+
 # Generated reports and local run evidence; keep on disk, not in Git
 /reports/
 

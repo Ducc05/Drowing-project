@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, post, request } from './api'
 
-type Job = { id: string; idempotency_key?: string; state: string; progress?: { frame: number; total: number } }
+type Job = { id: string; idempotency_key?: string; state: string; progress?: { frame: number; total: number; fps?: number | null } }
 const finished = new Set(['completed', 'sync_pending', 'cancelled', 'failed'])
 
 /** The latest processed frame, not a second video inference request. */
@@ -56,7 +56,7 @@ export function LiveVideoPreview({ requestKey, allowStop = false }: { requestKey
   const ended = job && finished.has(job.state)
   return <section className="live-video-preview" aria-label="Video đang được model xử lý">
     <div className="toolbar"><b>{ended ? 'Đã kết thúc xử lý' : 'Xem model gán nhãn trực tiếp'}</b>
-      {job?.progress && <span className="muted">Khung {job.progress.frame}/{job.progress.total}</span>}
+      {job?.progress && <span className="muted">Khung {job.progress.frame}/{job.progress.total} · Tốc độ model: {job.progress.fps != null ? `${job.progress.fps.toFixed(1)} khung/giây` : '—'}</span>}
       {allowStop && job?.state === 'running' && <button className="btn btn-small btn-danger" disabled={stopping} onClick={() => void stop()}>{stopping ? 'Đang dừng…' : 'Dừng video'}</button>}
     </div>
     {src ? <img src={src} alt="Khung video vừa xử lý với nhãn và khung nhận diện" />
