@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { api, newKey, post, request, scoreText, useAction, useCellGrid, useConfidence, usePolling, cellGridParam, parseCellGrid } from '../api'
+import { api, newKey, post, request, scoreText, useAction, useCellGrid, useChosenModel, useConfidence, usePolling, resolveModelId, cellGridParam, parseCellGrid } from '../api'
 import { Banner, CellGridControl, ClassScores, ConfidenceControl, Panel, Tag } from '../ui'
 import { Icon } from '../icons'
 import { labelColor, labelVi, trackName, useAlarmSound, useTitleAlert } from '../overlayData'
@@ -15,6 +15,7 @@ type Status = {
   latency_ms_p50?: number | null; latency_ms_p95?: number | null; elapsed_seconds?: number; tracker?: string | null
   alert_track_ids?: string[]; records?: Record_[]; last_session?: Status | null; confidence_threshold?: number | null
 }
+type LocalModel = { id: string; display_version: string; status: string; model_kind: string | null; checkpoint: { size_bytes: number } | null }
 type Readiness = { ready_for_request: boolean; reason?: string; model_version?: string; default_confidence?: number; default_cell_grid?: string; cell_grid_supported?: boolean }
 
 const branchText: Record<string, string> = { temporal: 'temporal', image_warmup: 'ảnh đơn (khởi động)',
@@ -50,6 +51,14 @@ export default function CameraPage() {
   }, [setActionError])
   usePolling(load, 1000, true)
 
+  // Weights files found in the models folder; the choice applies to the next Start and is remembered in this browser.
+  const [models, setModels] = useState<LocalModel[]>([])
+  const [chosenModel, pickModel] = useChosenModel()
+  useEffect(() => {
+    request<{ models: LocalModel[] }>('/api/v1/models').then((r) => setModels(r.models.filter((m) => m.model_kind === 'h20saver'))).catch(() => undefined)
+  }, [])
+  const modelId = resolveModelId(models, chosenModel)
+
   const doProbe = () => action.run(async () => {
     setProbe('')
     const result = await post<{ width: number; height: number; source: string }>('/api/v1/camera/probe', { source })
@@ -65,10 +74,10 @@ export default function CameraPage() {
     if (tabMode) {
       // Frames must flow while the server loads the model: it waits for the first frame before it reports "started".
       beginSending(SEND_FPS)
-      try { await post('/api/v1/camera/start', { source: 'browser-tab', fps: SEND_FPS, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam }) }
+      try { await post('/api/v1/camera/start', { source: 'browser-tab', fps: SEND_FPS, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam, model_version_id: modelId }) }
       catch (reason) { stopShare(); throw reason }
     } else {
-      await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam })
+      await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam, model_version_id: modelId })
     }
     await load()
     return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.`
@@ -123,6 +132,10 @@ export default function CameraPage() {
           <button type="button" className={tabMode ? 'on' : ''} disabled={active || sharing} onClick={() => setMode('tab')}>Quét tab/cửa sổ</button>
         </div>
       </div>
+      {models.length > 1 && <label className="field wide model-pick">Model
+        <select value={modelId} disabled={active || sharing} onChange={(e) => pickModel(e.target.value)}>
+          {models.map((m) => <option key={m.id} value={m.id}>{m.display_version}{m.status === 'active' ? ' (mặc định)' : ''}{m.checkpoint ? ` · ${Math.round(m.checkpoint.size_bytes / 1048576)} MB` : ''}</option>)}
+        </select></label>}
       {tabMode
         ? <div className="field grow">Tab/cửa sổ cần quét
           <div className="tab-picker">

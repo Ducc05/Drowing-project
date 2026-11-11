@@ -395,7 +395,8 @@ def model_evaluation(session_factory: sessionmaker, model_id: UUID) -> dict[str,
                            "at": d.created_at.isoformat()} for d in decisions]}
 
 
-def imported_model_evaluation(session_factory: sessionmaker, model_id: UUID, display_version: str) -> dict[str, Any]:
+def imported_model_evaluation(session_factory: sessionmaker, model_id: UUID, display_version: str,
+                              status: str = "active") -> dict[str, Any]:
     """Review summary for imported weights that have no training run or registry review to attribute."""
     with session_factory() as session:
         jobs = [j for j in session.scalars(select(Job).where(Job.job_type == "inference"))
@@ -403,7 +404,7 @@ def imported_model_evaluation(session_factory: sessionmaker, model_id: UUID, dis
         marks = [m for job in jobs for m in (job.payload or {}).get("review_marks", [])]
         videos = [job for job in jobs if (job.payload or {}).get("modality") == "video"]
         return {
-            "model_version_id": str(model_id), "display_version": display_version, "status": "active",
+            "model_version_id": str(model_id), "display_version": display_version, "status": status,
             "training_metrics": {},
             "training_metrics_note": "Imported H20Saver weights; this project has no training metrics to attribute to them.",
             "test_runs": {"videos": len(videos),

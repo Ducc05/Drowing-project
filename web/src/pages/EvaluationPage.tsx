@@ -1,7 +1,7 @@
 import { LiveVideoPreview } from '../LiveVideoPreview'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useCellGrid, useConfidence, when, cellGridParam, parseCellGrid } from '../api'
+import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useCellGrid, useChosenModel, useConfidence, resolveModelId, when, cellGridParam, parseCellGrid } from '../api'
 import type { JobSummary } from '../api'
 import { Banner, CellGridControl, ClassScores, ConfidenceControl, Matrix, Panel, Tag } from '../ui'
 import { cellOverlayOf, labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
@@ -271,7 +271,8 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
 
 export default function EvaluationPage() {
   const [models, setModels] = useState<ModelRow[]>([])
-  const [selected, setSelected] = useState<string>('')
+  const [chosenModel, pickModel] = useChosenModel()
+  const selected = resolveModelId(models, chosenModel) ?? ''
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null)
   const [videoJobs, setVideoJobs] = useState<VideoJob[]>([])
   const [jobId, setJobId] = useState('')
@@ -297,7 +298,6 @@ export default function EvaluationPage() {
     const [list, jobs] = await Promise.all([request<{ models: ModelRow[] }>('/api/v1/models'), request<{ jobs: VideoJob[] }>('/api/v1/jobs')])
     setModels(list.models)
     setVideoJobs(jobs.jobs.filter((job) => job.job_type === 'inference' && ['image', 'video'].includes(job.mode ?? '') && ['completed', 'sync_pending'].includes(job.state)))
-    setSelected((current) => current || list.models[0]?.id || '')
   }, [])
   const loadEvaluation = useCallback(async () => {
     if (!selected) { setEvaluation(null); return }
@@ -384,21 +384,21 @@ export default function EvaluationPage() {
     <header className="page-head"><div className="eyebrow">Đánh giá</div><h1>Xem model trên ảnh và video thật</h1>
       <p className="subtitle">Thử model đang dùng hoặc các phiên bản lịch sử trên ảnh và video; bạn có thể đánh dấu các đoạn đúng/sai để lưu nhận xét.</p></header>
     <Banner error={action.error} notice={action.notice} />
-    <Panel kicker="Model" title="Phiên bản model" subtitle="best.pt là model đang dùng; các phiên bản Kaggle còn lại là lịch sử."
+    <Panel kicker="Model" title="Phiên bản model" subtitle="Chọn một file model trong thư mục models để chạy thử; các phiên bản Kaggle còn lại là lịch sử."
       right={<label className="field inline">Tên người duyệt<input value={reviewer} onChange={(e) => setReviewer(e.target.value)} placeholder="Tên của bạn" /></label>}>
       {models.length === 0 ? <div className="empty-state">Chưa có model nào. Hoàn tất bước train ở trang Train để có model ứng viên.</div> : <>
-        <div className="model-tabs">{models.map((m) => <button key={m.id} className={`model-tab ${m.id === selected ? 'on' : ''}`} onClick={() => { setSelected(m.id); setJobId('') }}>
-          <b>{m.display_version}</b><span>{m.status === 'active' ? 'đang dùng' : `${m.status} · ${m.model_kind === 'image_tracked' ? 'ảnh + gộp theo ID' : m.model_kind === 'temporal' ? 'temporal' : 'chưa xác định loại'}`}</span></button>)}</div>
+        <div className="model-tabs">{models.map((m) => <button key={m.id} className={`model-tab ${m.id === selected ? 'on' : ''}`} onClick={() => { pickModel(m.id); setJobId('') }}>
+          <b>{m.display_version}</b><span>{m.status === 'active' ? 'đang dùng' : m.status === 'available' ? 'có sẵn trong thư mục models' : `${m.status} · ${m.model_kind === 'image_tracked' ? 'ảnh + gộp theo ID' : m.model_kind === 'temporal' ? 'temporal' : 'chưa xác định loại'}`}</span></button>)}</div>
         {model && <>
           <div className="stat-row">
-            <div><b>{model.status === 'active' ? 'đang dùng' : model.status}</b>{model.source !== 'imported_h20saver' && <span>trạng thái · {when(model.created_at)}</span>}</div>
+            <div><b>{model.status === 'active' ? 'đang dùng' : model.status === 'available' ? 'có sẵn' : model.status}</b>{model.source !== 'imported_h20saver' && <span>trạng thái · {when(model.created_at)}</span>}</div>
             <div><b>{model.cached_locally ? 'có' : 'chưa'}</b><span>đã tải về máy này</span></div>
             <div><b>{fmt(evaluation?.test_runs.images)}</b><span>ảnh đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.test_runs.videos)}</b><span>video đã chạy thử</span></div>
             <div><b>{fmt(evaluation?.human_review.segments)}</b><span>đoạn bạn đã đánh dấu</span></div>
           </div>
           {model.checkpoint && <div className="callout info checkpoint-box">
-            <b>{model.source === 'imported_h20saver' ? 'File model đang dùng' : 'Checkpoint dùng chung'}</b>{model.source === 'imported_h20saver' ? ' · best.pt được nhập từ H20Saver và kiểm tra mã băm.' : ' (mọi máy tải đúng file này và được kiểm tra mã băm trước khi dùng):'}
+            <b>{model.source === 'imported_h20saver' ? (model.status === 'active' ? 'File model đang dùng' : 'File model trong thư mục models') : 'Checkpoint dùng chung'}</b>{model.source === 'imported_h20saver' ? ` · ${model.display_version} được nhập từ H20Saver và kiểm tra mã băm.` : ' (mọi máy tải đúng file này và được kiểm tra mã băm trước khi dùng):'}
             {model.checkpoint.drive_url && <> <a href={model.checkpoint.drive_url} target="_blank" rel="noreferrer">mở trên Drive</a></>}
             <div>SHA-256 gói: <code>{model.checkpoint.archive_sha256}</code> · {fmt(Math.round(model.checkpoint.size_bytes / 1024))} KiB · trạng thái {model.checkpoint.status}</div>
             {model.checkpoint.weights_sha256 && <div>SHA-256 trọng số: <code>{model.checkpoint.weights_sha256}</code></div>}
@@ -407,7 +407,7 @@ export default function EvaluationPage() {
           <p className="muted">{evaluation?.training_metrics_note}</p>
           <div className="toolbar">
             {model.source === 'imported_h20saver'
-              ? <button className="secondary-button big" disabled>Đang dùng best.pt</button>
+              ? <button className="secondary-button big" disabled>Chạy bằng {model.display_version}</button>
               : <button className="secondary-button big" disabled={action.busy || model.cached_locally} onClick={() => void sync()}>{model.cached_locally ? 'Đã có trên máy' : 'Tải model về máy để thử'}</button>}
             <div className={`media-dropzone ${dragOver ? 'drag-over' : ''} ${file ? 'has-file' : ''}`}
               role="group" aria-label="Chọn ảnh hoặc video để chạy thử"

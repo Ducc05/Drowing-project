@@ -26,6 +26,7 @@ Hệ thống không in giá trị bí mật ra màn hình, log hay báo cáo. Ki
 | `PERSON_DETECTOR_WEIGHTS` | chạy thử ảnh/video/camera ở máy | file trọng số detector người (ví dụ YOLO `.pt`) |
 | `DETECTION_ENGINE` | không | `classifier` (mặc định: detector người + model đã duyệt) hoặc `h20saver` (xem mục H20Saver bên dưới) |
 | `H20SAVER_WEIGHTS`, `H20SAVER_CONFIDENCE` | khi `DETECTION_ENGINE=h20saver` | file `best.pt` của H20Saver và ngưỡng box (mặc định 0.25) |
+| `H20SAVER_MODELS_DIR` | không | thư mục chứa các file `.pt`; giao diện (trang Camera và Đánh giá) cho chọn model trong đó cho từng lần chạy. `H20SAVER_WEIGHTS` vẫn là model mặc định. Để trống = chỉ có model mặc định |
 | `H20SAVER_CELL_GRID`, `H20SAVER_CELL_WINDOW_SECONDS` | không | lưới `CỘTxHÀNG` (mặc định `6x4`, `off` để tắt) và cửa sổ xác nhận theo ô (mặc định 3 giây) — xem mục H20Saver |
 | `H20SAVER_MOTION_MAX_BODY_LENGTHS`, `H20SAVER_MOTION_WINDOW_SECONDS` | không | điều kiện chuyển động: số "thân người" tối đa một track được đi trong cửa sổ (mặc định `1.5` trong `3` giây, `off` để tắt) — xem mục H20Saver |
 | `APPROVED_MODEL_BUNDLE_DIR` | chạy thử | nơi lưu model đã tải về (mặc định `./local-cache/models/approved`) |

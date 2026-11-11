@@ -90,18 +90,25 @@ def _h20saver_model(settings: Settings, pinned_model_id: UUID | None):
     if settings.detection_engine != "h20saver":
         return None
     weights = Path(settings.h20saver_weights_path).expanduser() if settings.h20saver_weights_path else None
-    if weights is None or not weights.is_file():
-        if pinned_model_id is not None:
-            return None  # a pinned registry model does not depend on the H20Saver weights
+    default_present = weights is not None and weights.is_file()
+    if pinned_model_id is not None:
+        from drowning.inference.h20saver import h20saver_identity
+        from drowning.inference.local_weights import find_local_weights
+
+        if default_present:
+            identity = h20saver_identity(weights)
+            if identity.id == pinned_model_id:
+                return identity, weights
+        # Another file from the models folder, or (None) a pinned registry model.
+        chosen = find_local_weights(settings, pinned_model_id)
+        return (chosen.identity, chosen.path) if chosen is not None else None
+    if not default_present:
         if weights is None:
             raise InferenceUnavailable("DETECTION_ENGINE=h20saver but H20SAVER_WEIGHTS is not configured")
         raise InferenceUnavailable("H20SAVER_WEIGHTS file is missing")
     from drowning.inference.h20saver import h20saver_identity
 
-    identity = h20saver_identity(weights)
-    if pinned_model_id is not None and pinned_model_id != identity.id:
-        return None
-    return identity, weights
+    return h20saver_identity(weights), weights
 
 
 def runtime_weights_missing(settings: Settings, model_record: Any) -> str | None:
@@ -120,7 +127,8 @@ def get_approved_model(session: Session, settings: Settings, *, pinned_model_id:
     external = _h20saver_model(settings, pinned_model_id)
     if external is not None:
         identity, weights = external
-        return identity, weights.parent, {"model_kind": "h20saver", "weights_sha256": identity.weights_sha256}
+        return identity, weights.parent, {"model_kind": "h20saver", "weights_sha256": identity.weights_sha256,
+                                          "weights_path": str(weights)}
     if pinned_model_id is None:
         registry = session.get(ModelRegistry, settings.model_family)
         if registry is None or registry.approved_model_id is None:
@@ -171,7 +179,9 @@ def load_approved_pipeline(session: Session, settings: Settings, *,
         try:
             from drowning.inference.h20saver import load_h20saver_pipeline
 
-            pipeline, _ = load_h20saver_pipeline(Path(settings.h20saver_weights_path).expanduser(),
+            # The file this run was pinned to (may be any *.pt from the models folder, not only the default).
+            weights_path = Path(manifest.get("weights_path") or settings.h20saver_weights_path).expanduser()
+            pipeline, _ = load_h20saver_pipeline(weights_path,
                                                  confidence=settings.h20saver_confidence,
                                                  device=settings.model_device,
                                                  cell_grid=(settings.h20saver_cell_grid

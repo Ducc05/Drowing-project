@@ -90,7 +90,8 @@ class CameraService:
         return {**probe_camera(source, self.capture_factory), "source": display}
 
     def start(self, raw_source: str, idempotency_key: str, *, confidence: float | None = None,
-              cell_grid: str | None = None, fps: int | None = None) -> dict[str, Any]:
+              cell_grid: str | None = None, fps: int | None = None,
+              model_version_id: UUID | None = None) -> dict[str, Any]:
         source, display = parse_camera_source(raw_source)
         is_tab = source == BROWSER_TAB_SOURCE
         if len(idempotency_key.strip()) < 8:
@@ -109,7 +110,7 @@ class CameraService:
             if self._session is not None:
                 raise CameraBusy(self._job_id, "A camera session is already active on this installation")
             with self.factory() as session:
-                model_record, _, _ = get_approved_model(session, self.settings)
+                model_record, _, _ = get_approved_model(session, self.settings, pinned_model_id=model_version_id)
             missing = None if self.inference_factory is not None else runtime_weights_missing(self.settings, model_record)
             if missing:
                 raise InferenceUnavailable(f"{missing}; camera test cannot start")

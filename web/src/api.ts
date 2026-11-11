@@ -103,6 +103,22 @@ export function useCellGrid() {
   return [value, update] as const
 }
 
+const MODEL_KEY = 'selected-model'
+
+/** The model chosen by the user, shared by the Camera and Đánh giá pages and kept across reloads. ``null`` = none chosen yet. */
+export function useChosenModel() {
+  const [value, setValue] = useState<string | null>(() => { try { return localStorage.getItem(MODEL_KEY) } catch { return null } })
+  const update = useCallback((id: string) => {
+    try { localStorage.setItem(MODEL_KEY, id) } catch { /* private window: the choice is kept in memory only */ }
+    setValue(id)
+  }, [])
+  return [value, update] as const
+}
+
+/** The chosen model if the list still has it, otherwise the active (default) one, otherwise the first. */
+export const resolveModelId = (models: Array<{ id: string; status: string }>, chosen: string | null) =>
+  models.find((m) => m.id === chosen)?.id ?? models.find((m) => m.status === 'active')?.id ?? models[0]?.id
+
 /** Re-run `load` every `ms` while `active` is true (and once on mount). */
 export function usePolling(load: () => Promise<void>, ms: number, active: boolean) {
   const saved = useRef(load)

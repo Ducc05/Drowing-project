@@ -91,6 +91,8 @@ class Settings:
     # "h20saver" = the external H20Saver YOLO detector labels drowning/swimming/out_of_water itself.
     detection_engine: str = "classifier"
     h20saver_weights_path: str = ""
+    # Folder whose *.pt files can be chosen per run (empty = only the configured weights are offered).
+    h20saver_models_dir: str = ""
     h20saver_confidence: float = 0.25
     # Drowning alarms are confirmed per cell of a cols x rows grid (None = off); see drowning.inference.cells.
     h20saver_cell_grid: tuple[int, int] | None = (6, 4)
@@ -188,6 +190,7 @@ class Settings:
             supervisor_interval_seconds=_positive_int(env.get("SUPERVISOR_INTERVAL_SECONDS", "30"), "SUPERVISOR_INTERVAL_SECONDS"),
             detection_engine=engine,
             h20saver_weights_path=env.get("H20SAVER_WEIGHTS", "").strip(),
+            h20saver_models_dir=env.get("H20SAVER_MODELS_DIR", "").strip(),
             h20saver_confidence=h20saver_confidence,
             h20saver_cell_grid=cell_grid,
             h20saver_cell_window_seconds=cell_window,
