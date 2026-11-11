@@ -104,6 +104,7 @@ class CameraStartRequest(BaseModel):
     confidence: float | None = Field(default=None, ge=0.05, le=0.95, description="Per-box confidence threshold")
     cell_grid: str | None = Field(default=None, max_length=16, description='Cell gate grid "CxR" or "off"')
     fps: int | None = Field(default=None, ge=1, le=30, description="Nominal frames per second sent by the browser (browser-tab only)")
+    model_version_id: UUID | None = Field(default=None, description="Model from GET /api/v1/models to run (default: the configured one)")
 
 
 class CameraConfidenceRequest(BaseModel):
@@ -515,16 +516,27 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     @app.post("/api/v1/camera/start")
     def camera_start(body: CameraStartRequest, service: CameraService = Depends(get_camera)):
         return camera_call(lambda: service.start(body.source, body.idempotency_key, confidence=body.confidence,
-                                                         cell_grid=body.cell_grid, fps=body.fps))
+                                                         cell_grid=body.cell_grid, fps=body.fps,
+                                                         model_version_id=body.model_version_id))
 
     @app.post("/api/v1/camera/frame")
     async def camera_frame(request: Request, service: CameraService = Depends(get_camera_no_db)):
+        # A cross-origin page can only send "simple" content types without a CORS preflight; requiring
+        # image/jpeg stops other sites in the user's browser from injecting frames into a running session.
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "image/jpeg":
+            raise HTTPException(status_code=415, detail="frames must be sent as Content-Type: image/jpeg")
         declared = request.headers.get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > MAX_FRAME_BYTES:
             raise HTTPException(status_code=413, detail="frame is larger than the allowed size")
-        body = await request.body()
-        if len(body) > MAX_FRAME_BYTES:
-            raise HTTPException(status_code=413, detail="frame is larger than the allowed size")
+        # Count bytes as they arrive so a chunked body without Content-Length cannot fill memory.
+        chunks: list[bytes] = []
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > MAX_FRAME_BYTES:
+                raise HTTPException(status_code=413, detail="frame is larger than the allowed size")
+            chunks.append(chunk)
+        body = b"".join(chunks)
         return await run_in_threadpool(camera_call, lambda: service.push_frame(body))
 
     @app.post("/api/v1/camera/confidence")
@@ -645,26 +657,27 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
         hidden_model_id = None
         visible: list[dict[str, Any]] = []
         settings = request.app.state.settings
-        if settings.detection_engine == "h20saver" and settings.h20saver_weights_path:
+        if settings.detection_engine == "h20saver":
             from datetime import datetime, timezone
-            from drowning.inference.h20saver import h20saver_identity
-            weights = Path(settings.h20saver_weights_path).expanduser().resolve()
-            if weights.is_file():
-                identity = h20saver_identity(weights)
+            from drowning.inference.local_weights import local_weights
+            weights_files = local_weights(settings)
+            if weights_files:
                 registry = session.get(ModelRegistry, settings.model_family)
                 hidden_model_id = registry.approved_model_id if registry is not None else None
-                visible.append({"id": str(identity.id), "model_family": "H20Saver YOLO11x",
-                                "display_version": "best.pt", "status": "active",
+            for item in weights_files:
+                stat = item.path.stat()
+                visible.append({"id": str(item.identity.id), "model_family": "H20Saver YOLO11x",
+                                "display_version": item.name, "status": "active" if item.is_default else "available",
                                 "temporal_trained": False, "model_kind": "h20saver",
                                 "completion_kind": "imported_weights", "dataset_fingerprint": None,
                                 "metrics": {}, "source": "imported_h20saver",
                                 "checkpoint": {"storage": "local", "drive_file_id": None, "drive_url": None,
-                                               "archive_sha256": identity.weights_sha256,
-                                               "weights_sha256": identity.weights_sha256,
-                                               "size_bytes": weights.stat().st_size, "status": "ready",
+                                               "archive_sha256": item.identity.weights_sha256,
+                                               "weights_sha256": item.identity.weights_sha256,
+                                               "size_bytes": stat.st_size, "status": "ready",
                                                "note": "Imported H20Saver weights; no Kaggle training run is attributed."},
                                 "cached_locally": True,
-                                "created_at": datetime.fromtimestamp(weights.stat().st_mtime, timezone.utc).isoformat()})
+                                "created_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()})
         visible.extend({"id": str(model.id), "model_family": model.model_family,
                         "display_version": model.display_version, "status": model.status,
                         "temporal_trained": model.temporal_trained, "model_kind": model.model_kind,
@@ -694,11 +707,12 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     @app.get("/api/v1/models/{model_version_id}/evaluation")
     def evaluation(model_version_id: UUID, request: Request, session: Session = Depends(get_session)):
         settings = request.app.state.settings
-        if settings.detection_engine == "h20saver" and settings.h20saver_weights_path:
-            from drowning.inference.h20saver import h20saver_identity
-            weights = Path(settings.h20saver_weights_path).expanduser().resolve()
-            if weights.is_file() and h20saver_identity(weights).id == model_version_id:
-                return imported_model_evaluation(request.app.state.session_factory, model_version_id, "best.pt")
+        if settings.detection_engine == "h20saver":
+            from drowning.inference.local_weights import find_local_weights
+            local = find_local_weights(settings, model_version_id)
+            if local is not None:
+                return imported_model_evaluation(request.app.state.session_factory, model_version_id, local.name,
+                                                 status="active" if local.is_default else "available")
         try:
             return model_evaluation(request.app.state.session_factory, model_version_id)
         except KeyError:

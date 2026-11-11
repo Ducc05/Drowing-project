@@ -518,6 +518,30 @@ class CameraApiTests(unittest.TestCase):
         self.start_tab()
         self.assertEqual(self.post_frame(b"x" * (MAX_FRAME_BYTES + 1)).status_code, 413)
 
+    def test_frame_route_stops_reading_a_chunked_body_once_over_the_cap(self):
+        self.feed()
+        self.start_tab()
+        yielded = []
+
+        async def body():
+            for index in range(40):
+                yielded.append(index)
+                yield b"x" * (MAX_FRAME_BYTES // 4)
+
+        response = call(self.app, "POST", "/api/v1/camera/frame", content=body(), headers={"Content-Type": "image/jpeg"})
+        self.assertEqual(response.status_code, 413)
+        self.assertLess(len(yielded), 40, "the whole oversized body was read before rejecting it")
+
+    def test_frame_route_requires_the_image_jpeg_content_type(self):
+        self.feed()
+        self.start_tab()
+        for headers in ({"Content-Type": "text/plain"}, {"Content-Type": "application/x-www-form-urlencoded"}, {}):
+            response = call(self.app, "POST", "/api/v1/camera/frame", content=jpeg_bytes(), headers=headers)
+            self.assertEqual(response.status_code, 415, headers)
+        accepted = call(self.app, "POST", "/api/v1/camera/frame", content=jpeg_bytes(),
+                        headers={"Content-Type": "image/jpeg; charset=binary"})
+        self.assertEqual(accepted.status_code, 200)
+
     def test_frame_route_rejects_garbage_image(self):
         self.feed()
         self.start_tab()
