@@ -4,11 +4,11 @@ import type { ChangeEvent } from 'react'
 import { api, fmt, newKey, pct, post, request, SCORE_LABELS as LABELS, scoreText, useAction, useConfidence, when } from '../api'
 import type { JobSummary } from '../api'
 import { Banner, ClassScores, ConfidenceControl, Matrix, Panel, Tag } from '../ui'
-import { labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
+import { cellOverlayOf, labelColor, labelText, trackName, useAlertSegments } from '../overlayData'
 import { AlertBanner, AlertList, AlertTimeline, LabelLegend, ScoreFilter, TrackTable, VideoOverlay, VideoStats } from '../videoOverlay'
 import { BoxSummaryView, ImageBoxReview } from './BoxReview'
 import type { BoxSummary } from './BoxReview'
-import type { AlertSegment, Detection, Label, VideoSummary } from '../overlayData'
+import type { AlertSegment, CellOverlay, Detection, DetectionsResult, Label, VideoSummary } from '../overlayData'
 
 type Metrics = { accuracy?: number; macro_f1?: number; per_class_recall?: Record<string, number>; confusion_matrix?: number[][]; support?: unknown }
 type ModelRow = {
@@ -84,6 +84,8 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   const [minScore, setMinScore] = useState<number | null>(null)
   const [detections, setDetections] = useState<Detection[]>([])
   const [alertIntervals, setAlertIntervals] = useState<AlertSegment[]>()
+  const [cells, setCells] = useState<CellOverlay>()
+  const [showCells, setShowCells] = useState(true)
   const [summary, setSummary] = useState<VideoSummary>()
   const [marks, setMarks] = useState<Mark[]>([])
   const [track, setTrack] = useState('')
@@ -108,7 +110,7 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
   }, [jobId])
   const loadMarks = useCallback(async () => { setMarks((await request<{ marks: Mark[] }>(`/api/v1/jobs/${jobId}/review-marks`)).marks) }, [jobId])
   useEffect(() => {
-    request<{ detections: Detection[]; alert_intervals?: AlertSegment[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals) }).catch((e) => setActionError(String(e)))
+    request<DetectionsResult>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals); setCells(cellOverlayOf(r)) }).catch((e) => setActionError(String(e)))
     request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setActionError(String(e)))
     void loadMarks().catch((e) => setActionError(String(e)))
     void loadPresence().catch((e) => setActionError(String(e)))
@@ -172,13 +174,14 @@ function VideoReview({ jobId, reviewer, onChanged }: { jobId: string; reviewer: 
           onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
           src={api(`/api/v1/jobs/${jobId}/results/${summary?.render === 'overlay' ? 'source' : 'annotated'}`)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} /></div>
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} cells={cells} showCells={showCells} /></div>
         <AlertBanner tracks={alerting} />
         <AlertTimeline segments={alerts} durationMs={durationMs} playbackMs={playbackMs} onSeek={seek} />
         <div className="player-foot">
           <LabelLegend />
           {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện nhãn + điểm trên từng ô</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
+          {summary?.render === 'overlay' && cells && <label className="switch" title={`Lưới ${cells.cols}×${cells.rows}: chỉ vùng có phiếu drowning liên tục ${cells.window_s} giây mới được xác nhận cảnh báo`}><input type="checkbox" checked={showCells} onChange={(e) => setShowCells(e.target.checked)} /><span />Hiện lưới vùng (đỏ = vùng đang cảnh báo)</label>}
         </div>
         {summary?.render === 'overlay' && <ScoreFilter value={viewThreshold} runThreshold={summary?.confidence_threshold} onChange={setMinScore} />}
       </div>

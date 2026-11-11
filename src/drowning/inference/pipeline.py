@@ -279,7 +279,7 @@ class PersonStateInference:
                         if preview_callback is not None and time.monotonic() - last_preview >= 0.2:
                             from drowning.inference.preview import preview_jpeg
                             jpeg = preview_jpeg(bgr, records, timestamp,
-                                getattr(self, "active_alert_tracks", []))
+                                getattr(self, "active_alert_tracks", []), getattr(self, "cell_overlay", None))
                             if jpeg is not None:
                                 preview_callback(jpeg)
                             last_preview = time.monotonic()

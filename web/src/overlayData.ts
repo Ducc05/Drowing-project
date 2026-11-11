@@ -57,6 +57,14 @@ export function trackStats(detections: Detection[]): TrackStat[] {
       alerted: rows.some((row) => row.alert) }
   }).sort((a, b) => Number(b.alerted) - Number(a.alerted) || (b.maxDrowning ?? -1) - (a.maxDrowning ?? -1) || a.track_id.localeCompare(b.track_id))
 }
+/** Cell grid of the alert gate: a cell is "hot" while it holds sustained drowning votes (only those cells can confirm an alert). */
+export type CellInterval = { cell: [number, number]; start: number; end: number }
+export type CellOverlay = { cols: number; rows: number; window_s: number; intervals: CellInterval[] }
+export type DetectionsResult = { detections: Detection[]; alert_intervals?: AlertSegment[]
+  cell_gate?: { cols: number; rows: number; window_s: number }; cell_intervals?: CellInterval[] }
+export const cellOverlayOf = (result: DetectionsResult): CellOverlay | undefined =>
+  result.cell_gate ? { ...result.cell_gate, intervals: result.cell_intervals ?? [] } : undefined
+
 /** ``peak`` is the highest drowning score seen inside the interval (0–1, uncalibrated). */
 export type AlertSegment = { track_id: string; start: number; end: number; peak: number | null }
 

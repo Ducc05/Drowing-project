@@ -4,10 +4,11 @@ import { api, fmt, request, SCORE_LABELS as LABELS, scoreText } from './api'
 import { Icon } from './icons'
 import { ConfidenceControl } from './ui'
 import { ALERT_COLOR, alertSegments, boxScore, clock, coveredMs, labelColor, labelText, labelVi, trackName, trackStats } from './overlayData'
-import type { AlertSegment, Detection, TrackStat, VideoSummary } from './overlayData'
+import { cellOverlayOf } from './overlayData'
+import type { AlertSegment, CellOverlay, Detection, DetectionsResult, TrackStat, VideoSummary } from './overlayData'
 
 /** Boxes drawn over the browser video. Every box carries its own score; ``minScore`` hides boxes below it (view only). */
-export function VideoOverlay({ video, detections, summary, showBoxes = true, showAllLabels = true, minScore = 0 }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean; showAllLabels?: boolean; minScore?: number }) {
+export function VideoOverlay({ video, detections, summary, showBoxes = true, showAllLabels = true, minScore = 0, cells, showCells = true }: { video: RefObject<HTMLVideoElement | null>; detections: Detection[]; summary?: VideoSummary; showBoxes?: boolean; showAllLabels?: boolean; minScore?: number; cells?: CellOverlay; showCells?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const element = video.current, layer = canvas.current
@@ -31,6 +32,16 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true, sho
           const ox = (bounds.width - element.videoWidth * scale) / 2, oy = (bounds.height - element.videoHeight * scale) / 2
           const at = element.currentTime * 1000
           const step = 1000 * (summary.frame_stride ?? 3) / (summary.fps_metadata || 30)
+          if (cells && showCells) {
+            // Grid of the alert gate: red tint = this region currently holds sustained drowning votes.
+            const gw = element.videoWidth * scale, gh = element.videoHeight * scale, cw = gw / cells.cols, ch = gh / cells.rows
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.28)'
+            for (const { cell: [col, row], start, end } of cells.intervals) if (at >= start && at < end) ctx.fillRect(ox + col * cw, oy + row * ch, cw, ch)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; ctx.lineWidth = 1; ctx.beginPath()
+            for (let col = 1; col < cells.cols; col++) { ctx.moveTo(ox + col * cw, oy); ctx.lineTo(ox + col * cw, oy + gh) }
+            for (let row = 1; row < cells.rows; row++) { ctx.moveTo(ox, oy + row * ch); ctx.lineTo(ox + gw, oy + row * ch) }
+            ctx.stroke()
+          }
           for (const [trackId, list] of showBoxes ? byTrack : []) {
             let left: Detection | undefined, right: Detection | undefined
             for (const row of list) { if (row.timestamp_ms <= at) left = row; if (row.timestamp_ms >= at) { right = row; break } }
@@ -63,7 +74,7 @@ export function VideoOverlay({ video, detections, summary, showBoxes = true, sho
     }
     const resize = new ResizeObserver(draw); resize.observe(element); draw()
     return () => { alive = false; resize.disconnect(); cancelAnimationFrame(raf); if (frameHandle !== undefined && 'cancelVideoFrameCallback' in element) element.cancelVideoFrameCallback(frameHandle) }
-  }, [detections, summary, video, showBoxes, showAllLabels, minScore])
+  }, [detections, summary, video, showBoxes, showAllLabels, minScore, cells, showCells])
   return summary?.render === 'overlay' ? <canvas ref={canvas} className="video-overlay" aria-hidden="true" /> : null
 }
 
@@ -183,6 +194,8 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
   const video = useRef<HTMLVideoElement>(null)
   const [detections, setDetections] = useState<Detection[]>([])
   const [alertIntervals, setAlertIntervals] = useState<AlertSegment[]>()
+  const [cells, setCells] = useState<CellOverlay>()
+  const [showCells, setShowCells] = useState(true)
   const [summary, setSummary] = useState<VideoSummary>()
   const [playbackMs, setPlaybackMs] = useState(0)
   const [durationMs, setDurationMs] = useState(0)
@@ -191,7 +204,7 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
   const [minScore, setMinScore] = useState<number | null>(null)
   const [error, setError] = useState('')
   useEffect(() => {
-    request<{ detections: Detection[]; alert_intervals?: AlertSegment[] }>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals) }).catch((e) => setError(String(e)))
+    request<DetectionsResult>(`/api/v1/jobs/${jobId}/results/detections`).then((r) => { setDetections(r.detections); setAlertIntervals(r.alert_intervals); setCells(cellOverlayOf(r)) }).catch((e) => setError(String(e)))
     request<{ summary?: VideoSummary }>(`/api/v1/jobs/${jobId}/results`).then((r) => setSummary(r.summary)).catch((e) => setError(String(e)))
   }, [jobId])
   const segments = useMemo(() => alertIntervals ?? alertSegments(detections), [detections, alertIntervals])
@@ -208,7 +221,7 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
             onLoadedMetadata={(event) => setDurationMs(event.currentTarget.duration * 1000 || 0)}
             onTimeUpdate={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)}
             onSeeked={(event) => setPlaybackMs(event.currentTarget.currentTime * 1000)} />
-          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} />
+          <VideoOverlay video={video} detections={detections} summary={summary} showBoxes={showBoxes} showAllLabels={showAllLabels} minScore={viewThreshold} cells={cells} showCells={showCells} />
         </div>
         <AlertBanner tracks={active} />
         <AlertTimeline segments={segments} durationMs={duration} playbackMs={playbackMs} onSeek={seek} />
@@ -216,6 +229,7 @@ export function ResultVideo({ jobId, src }: { jobId: string; src: string }) {
           <LabelLegend />
           {summary?.render === "overlay" && <label className="switch"><input type="checkbox" checked={showAllLabels} onChange={(e) => setShowAllLabels(e.target.checked)} /><span />Hiện nhãn + điểm trên từng ô</label>}
           {summary?.render === 'overlay' && <label className="switch"><input type="checkbox" checked={showBoxes} onChange={(e) => setShowBoxes(e.target.checked)} /><span />Hiện khung</label>}
+          {summary?.render === 'overlay' && cells && <label className="switch" title={`Lưới ${cells.cols}×${cells.rows}: chỉ vùng có phiếu drowning liên tục ${cells.window_s} giây mới được xác nhận cảnh báo`}><input type="checkbox" checked={showCells} onChange={(e) => setShowCells(e.target.checked)} /><span />Hiện lưới vùng (đỏ = vùng đang cảnh báo)</label>}
         </div>
         {summary?.render === 'overlay' && <ScoreFilter value={viewThreshold} runThreshold={summary?.confidence_threshold} onChange={setMinScore} />}
       </div>

@@ -154,7 +154,11 @@ def load_approved_pipeline(session: Session, settings: Settings, *,
 
             pipeline, _ = load_h20saver_pipeline(Path(settings.h20saver_weights_path).expanduser(),
                                                  confidence=settings.h20saver_confidence,
-                                                 device=settings.model_device)
+                                                 device=settings.model_device,
+                                                 cell_grid=settings.h20saver_cell_grid,
+                                                 cell_window_s=settings.h20saver_cell_window_seconds,
+                                                 motion_max_body_lengths=settings.h20saver_motion_max_body_lengths,
+                                                 motion_window_s=settings.h20saver_motion_window_seconds)
             return pipeline, model_record
         except ImportError as exc:
             raise InferenceUnavailable("Install vision and detector dependencies before H20Saver inference") from exc

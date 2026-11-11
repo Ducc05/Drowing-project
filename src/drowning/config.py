@@ -92,6 +92,12 @@ class Settings:
     detection_engine: str = "classifier"
     h20saver_weights_path: str = ""
     h20saver_confidence: float = 0.25
+    # Drowning alarms are confirmed per cell of a cols x rows grid (None = off); see drowning.inference.cells.
+    h20saver_cell_grid: tuple[int, int] | None = (6, 4)
+    h20saver_cell_window_seconds: float = 3.0
+    # A track that travelled further than this many body lengths in the window is not confirmed (None = off).
+    h20saver_motion_max_body_lengths: float | None = 1.5
+    h20saver_motion_window_seconds: float = 3.0
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "Settings":
@@ -131,6 +137,28 @@ class Settings:
             raise ValueError("H20SAVER_CONFIDENCE must be a number") from exc
         if not 0 <= h20saver_confidence <= 1:
             raise ValueError("H20SAVER_CONFIDENCE must be between 0 and 1")
+        from drowning.inference.cells import parse_cell_grid
+        from drowning.inference.motion import parse_motion_limit
+        try:
+            cell_grid = parse_cell_grid(env.get("H20SAVER_CELL_GRID", "").strip() or "6x4")
+        except ValueError as exc:
+            raise ValueError(f"H20SAVER_CELL_GRID: {exc}") from exc
+        try:
+            cell_window = float(env.get("H20SAVER_CELL_WINDOW_SECONDS", "3"))
+        except ValueError as exc:
+            raise ValueError("H20SAVER_CELL_WINDOW_SECONDS must be a number") from exc
+        if not 0.5 <= cell_window <= 30:
+            raise ValueError("H20SAVER_CELL_WINDOW_SECONDS must be between 0.5 and 30")
+        try:
+            motion_limit = parse_motion_limit(env.get("H20SAVER_MOTION_MAX_BODY_LENGTHS", "").strip() or "1.5")
+        except ValueError as exc:
+            raise ValueError(f"H20SAVER_MOTION_MAX_BODY_LENGTHS: {exc}") from exc
+        try:
+            motion_window = float(env.get("H20SAVER_MOTION_WINDOW_SECONDS", "3"))
+        except ValueError as exc:
+            raise ValueError("H20SAVER_MOTION_WINDOW_SECONDS must be a number") from exc
+        if not 0.5 <= motion_window <= 30:
+            raise ValueError("H20SAVER_MOTION_WINDOW_SECONDS must be between 0.5 and 30")
         return cls(
             app_env=env.get("APP_ENV", "development"),
             api_host=env.get("API_HOST", "127.0.0.1"),
@@ -161,6 +189,10 @@ class Settings:
             detection_engine=engine,
             h20saver_weights_path=env.get("H20SAVER_WEIGHTS", "").strip(),
             h20saver_confidence=h20saver_confidence,
+            h20saver_cell_grid=cell_grid,
+            h20saver_cell_window_seconds=cell_window,
+            h20saver_motion_max_body_lengths=motion_limit,
+            h20saver_motion_window_seconds=motion_window,
         )
 
     def status(self) -> dict[str, object]:
