@@ -7,6 +7,7 @@ confirmed stop after both threads have exited and the capture device has been re
 
 from __future__ import annotations
 
+import io
 import re
 import threading
 import time
@@ -14,8 +15,12 @@ from collections import deque
 from typing import Any, Callable, Iterator
 from urllib.parse import urlsplit, urlunsplit
 
+import numpy as np
 from PIL import Image
 
+BROWSER_TAB_SOURCE = "browser-tab"
+MAX_FRAME_BYTES = 2_000_000
+MAX_FRAME_SIDE = 1920
 _ALLOWED_SCHEMES = {"http", "https", "rtsp", "rtmp"}
 _MAX_CAMERA_INDEX = 15
 _STREAM_BOUNDARY = "frame"
@@ -40,6 +45,8 @@ def parse_camera_source(raw: str) -> tuple[int | str, str]:
     credentials embedded in a URL are removed from every displayed or stored form.
     """
     value = (raw or "").strip()
+    if value == BROWSER_TAB_SOURCE:
+        return BROWSER_TAB_SOURCE, BROWSER_TAB_SOURCE
     if re.fullmatch(r"\d{1,2}", value):
         index = int(value)
         if index > _MAX_CAMERA_INDEX:
@@ -81,6 +88,82 @@ def probe_camera(source: int | str, capture_factory: Callable[[Any], Any] | None
         return {"connected": True, "width": int(width), "height": int(height)}
     finally:
         capture.release()
+
+
+def decode_frame(jpeg: bytes, *, max_side: int = MAX_FRAME_SIDE) -> np.ndarray:
+    """Decode a browser-supplied JPEG to a BGR frame, rejecting oversized or invalid input before decoding."""
+    import cv2
+
+    if not jpeg:
+        raise CameraSourceError("frame is empty")
+    if len(jpeg) > MAX_FRAME_BYTES:
+        raise CameraSourceError("frame is larger than the allowed size")
+    try:
+        with Image.open(io.BytesIO(jpeg)) as header:
+            width, height = header.size
+    except Exception as exc:
+        raise CameraSourceError("frame is not a valid image") from exc
+    if max(width, height) > max_side:
+        raise CameraSourceError(f"frame is larger than {max_side} pixels on its longest side")
+    frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise CameraSourceError("frame is not a valid image")
+    return frame
+
+
+class PushCapture:
+    """VideoCapture-like source fed by ``push``; ``read`` returns only frames it has not returned yet.
+
+    Only the newest frame is kept, so a slow model drops frames instead of accumulating latency.
+    """
+
+    def __init__(self, fps: float = 10.0, *, read_timeout: float = 1.0, first_frame_timeout: float = 20.0):
+        self.fps = float(fps)
+        self.read_timeout = read_timeout
+        self.first_frame_timeout = first_frame_timeout
+        self.released = False
+        self.shape: tuple[int, int] | None = None
+        self._condition = threading.Condition()
+        self._frame: np.ndarray | None = None
+        self._seq = 0
+        self._read_seq = 0
+        self._has_read = False
+
+    def isOpened(self) -> bool:
+        return not self.released
+
+    def push(self, frame: np.ndarray) -> None:
+        with self._condition:
+            if self.released:
+                return
+            if self.shape is None:
+                self.shape = (int(frame.shape[0]), int(frame.shape[1]))
+            self._frame = frame.copy()
+            self._seq += 1
+            self._condition.notify_all()
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        timeout = self.read_timeout if self._has_read else self.first_frame_timeout
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while self._seq == self._read_seq and not self.released:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, None
+                self._condition.wait(remaining)
+            if self.released or self._frame is None:
+                return False, None
+            self._read_seq = self._seq
+            self._has_read = True
+            return True, self._frame.copy()
+
+    def release(self) -> None:
+        with self._condition:
+            self.released = True
+            self._condition.notify_all()
+
+    def get(self, prop_id: int) -> float:
+        return self.fps if prop_id == 5 else 0.0  # 5 == cv2.CAP_PROP_FPS
 
 
 class CameraSession:

@@ -3,9 +3,10 @@ import type { CSSProperties } from 'react'
 import { api, newKey, post, request, scoreText, useAction, useCellGrid, useConfidence, usePolling, cellGridParam, parseCellGrid } from '../api'
 import { Banner, CellGridControl, ClassScores, ConfidenceControl, Panel, Tag } from '../ui'
 import { Icon } from '../icons'
-import { labelColor, labelVi, trackName, useAlarmSound } from '../overlayData'
+import { labelColor, labelVi, trackName, useAlarmSound, useTitleAlert } from '../overlayData'
 import type { Label } from '../overlayData'
 import { AlertBanner, LabelLegend, ScoreBar } from '../videoOverlay'
+import { beginSending, pickSurface, screenShareSupported, stopShare, useScreenShare } from '../screenShare'
 
 type Record_ = { track_id: string; label: string | null; prediction_branch: string; detector_confidence: number; class_scores?: number[] | null; bbox_xyxy: number[]; alert?: boolean }
 type Status = {
@@ -24,6 +25,7 @@ const COUNT_CARDS: Array<{ label: Label; icon: 'alert' | 'swim' | 'person'; hint
   { label: 'swimming', icon: 'swim', hint: 'dưới nước' },
   { label: 'out_of_water', icon: 'person', hint: 'trên bờ' },
 ]
+const SEND_FPS = 10
 const elapsed = (seconds?: number) => {
   const s = Math.round(seconds ?? 0)
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -31,6 +33,9 @@ const elapsed = (seconds?: number) => {
 
 export default function CameraPage() {
   const [source, setSource] = useState('0')
+  const [mode, setMode] = useState<'camera' | 'tab'>('camera')
+  const share = useScreenShare()
+  const tabMode = mode === 'tab'
   const [status, setStatus] = useState<Status>({ active: false })
   const [readiness, setReadiness] = useState<Readiness | null>(null)
   const [probe, setProbe] = useState<string>('')
@@ -55,8 +60,24 @@ export default function CameraPage() {
   const [chosenGrid, setCellGrid] = useCellGrid()
   const cellGrid = chosenGrid ?? parseCellGrid(readiness?.default_cell_grid)
   const gridParam = readiness?.cell_grid_supported ? cellGridParam(chosenGrid) : undefined
-  const start = () => action.run(async () => { setProbe(''); await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam }); await load(); return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.` })
-  const stop = () => action.run(async () => { await post('/api/v1/camera/stop'); await load(); return 'Đã dừng camera và xác nhận các luồng xử lý đã thoát.' })
+  const start = () => action.run(async () => {
+    setProbe('')
+    if (tabMode) {
+      // Frames must flow while the server loads the model: it waits for the first frame before it reports "started".
+      beginSending(SEND_FPS)
+      try { await post('/api/v1/camera/start', { source: 'browser-tab', fps: SEND_FPS, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam }) }
+      catch (reason) { stopShare(); throw reason }
+    } else {
+      await post('/api/v1/camera/start', { source, idempotency_key: newKey('camera'), confidence, cell_grid: gridParam })
+    }
+    await load()
+    return `Camera đã chạy với ngưỡng ${confidence.toFixed(2)}. Ô compute chung đang được giữ.`
+  })
+  const stop = () => action.run(async () => {
+    try { await post('/api/v1/camera/stop') } finally { stopShare() }
+    await load()
+    return 'Đã dừng camera và xác nhận các luồng xử lý đã thoát.'
+  })
 
   const [sound, setSound] = useState(true)
   const active = status.active
@@ -75,25 +96,50 @@ export default function CameraPage() {
   const summary = active ? status : status.last_session
   const records = active ? status.records ?? [] : []
   const alertRecords = records.filter((r) => r.alert)
-  const alerted = active ? status.alert_track_ids ?? alertRecords.map((r) => r.track_id) : []
-  useAlarmSound(sound && alerted.length > 0)
+  const polledAlerts = active ? status.alert_track_ids ?? alertRecords.map((r) => r.track_id) : []
+  const alerted = polledAlerts
+  // Alerts that ride on the frame-upload replies arrive even when polling is throttled in a background tab;
+  // they drive the sound and the tab title only, so the on-screen lists stay consistent with the polled records.
+  const soundAlerts = active && tabMode && share.alertTracks.length ? [...new Set([...polledAlerts, ...share.alertTracks])] : polledAlerts
+  useAlarmSound(sound && soundAlerts.length > 0)
+  useTitleAlert(soundAlerts.length > 0)
+  // The server session ended by itself (stream error): stop capturing in the browser too.
+  const sharing = share.phase === 'starting' || share.phase === 'sending'
+  const wasActive = useRef(false)
+  useEffect(() => {
+    if (active) { wasActive.current = true; return }
+    if (wasActive.current) { wasActive.current = false; if (share.phase === 'sending') stopShare() }
+  }, [active, share.phase])
 
   return <div className="page-stack">
     <header className="page-head"><div className="eyebrow">Camera</div><h1>Giám sát trực tiếp</h1>
       <p className="subtitle">Webcam Windows (số 0–15) hoặc URL luồng http/https/rtsp/rtmp. Chỉ dùng model đã duyệt; một lúc chỉ chạy một tác vụ compute trên toàn hệ thống.</p></header>
     <Banner error={action.error} notice={action.notice} />
 
-    <section className="source-bar">
-      <label className="field grow">Nguồn camera<input value={source} disabled={active} onChange={(e) => setSource(e.target.value)} placeholder="0 hoặc http://192.168.1.5:8080/video" /></label>
+    <section className={`source-bar ${active || sharing ? 'running' : ''}`}>
+      <div className="field wide source-mode">Nguồn
+        <div className="segmented" role="group" aria-label="Loại nguồn">
+          <button type="button" className={tabMode ? '' : 'on'} disabled={active || sharing} onClick={() => setMode('camera')}>Webcam / URL</button>
+          <button type="button" className={tabMode ? 'on' : ''} disabled={active || sharing} onClick={() => setMode('tab')}>Quét tab/cửa sổ</button>
+        </div>
+      </div>
+      {tabMode
+        ? <div className="field grow">Tab/cửa sổ cần quét
+          <div className="tab-picker">
+            <button className="btn pick-btn" disabled={active || sharing || action.busy || !screenShareSupported()} onClick={() => void pickSurface()}><Icon name="camera" size={16} /> Chọn tab để quét…</button>
+            <span className="muted tab-label" title={share.surfaceLabel ?? undefined}>{share.surfaceLabel ? `Đã chọn: ${share.surfaceLabel}` : 'Chưa chọn tab nào.'}</span>
+          </div>
+        </div>
+        : <label className="field grow">Nguồn camera<input value={source} disabled={active} onChange={(e) => setSource(e.target.value)} placeholder="0 hoặc http://192.168.1.5:8080/video" /></label>}
       <div className="source-actions">
-        <button className="btn" disabled={active || action.busy || !source.trim()} onClick={() => void doProbe()}><Icon name="link" size={16} /> Kiểm tra kết nối</button>
+        {!tabMode && <button className="btn" disabled={active || action.busy || !source.trim()} onClick={() => void doProbe()}><Icon name="link" size={16} /> Kiểm tra kết nối</button>}
         {!active
-          ? <button className="btn btn-primary" disabled={action.busy || !source.trim() || !readiness?.ready_for_request} onClick={() => void start()}><Icon name="play" size={16} /> Bắt đầu</button>
+          ? <button className="btn btn-primary" disabled={action.busy || !readiness?.ready_for_request || (tabMode ? share.phase !== 'ready' : !source.trim())} onClick={() => void start()}><Icon name="play" size={16} /> Bắt đầu</button>
           : <button className="btn btn-danger" disabled={action.busy} onClick={() => void stop()}><Icon name="stop" size={16} /> Dừng</button>}
       </div>
       <div className="source-status">
         <Tag tone={readiness?.ready_for_request ? 'ok' : 'warn'}>{readiness?.ready_for_request ? `model ${readiness.model_version}` : 'chưa sẵn sàng'}</Tag>
-        <span className="muted">Thông tin đăng nhập trong URL không được hiển thị hay lưu lại.</span>
+        <span className="muted source-note">Thông tin đăng nhập trong URL không được hiển thị hay lưu lại.</span>
       </div>
       <div className="wide">
         <ConfidenceControl value={confidence} onChange={setConfidence}
@@ -103,6 +149,9 @@ export default function CameraPage() {
         {readiness?.cell_grid_supported && <CellGridControl value={cellGrid} onChange={setCellGrid} disabled={active}
           hint={active ? 'Đổi lưới cần dừng rồi bật lại camera.' : undefined} />}
       </div>
+      {tabMode && !screenShareSupported() && <div className="callout warn wide">Trình duyệt này chưa hỗ trợ quét tab. Hãy dùng Chrome hoặc Edge.</div>}
+      {tabMode && <div className="callout info wide tab-help">Mở video ở một tab khác rồi chọn tab đó. App tự loại trừ chính tab này nên không bị lặp hình. Để cảnh báo chắc chắn đến kịp, hãy mở app thành cửa sổ riêng cạnh cửa sổ video (cửa sổ bị che hoàn toàn có thể bị trình duyệt giảm tốc).</div>}
+      {tabMode && share.error && <div className="callout warn wide">{share.error}</div>}
       {probe && <div className="callout ok wide">{probe}</div>}
       {!readiness?.ready_for_request && <div className="callout warn wide">{readiness?.reason ?? 'Cần model đã duyệt, model được tải về máy và PERSON_DETECTOR_WEIGHTS trước khi chạy camera.'}</div>}
     </section>
@@ -124,10 +173,11 @@ export default function CameraPage() {
         <section className={`monitor-frame ${alerted.length ? 'alerting' : ''}`}>
           <header className="monitor-head">
             <span className={`live-dot ${alerted.length ? 'red' : ''}`} />
-            <b className="monitor-source">{/^\d+$/.test(status.source ?? '') ? `Webcam ${status.source}` : status.source}</b>
+            <b className="monitor-source">{status.source === 'browser-tab' ? 'Tab trình duyệt' : /^\d+$/.test(status.source ?? '') ? `Webcam ${status.source}` : status.source}</b>
             <span className="muted">{status.width}×{status.height}</span>
             <Tag tone={alerted.length ? 'bad' : status.state === 'running' ? 'ok' : 'warn'}>{alerted.length ? 'đang cảnh báo' : status.state}</Tag>
             <span className="monitor-metrics">
+              {status.source === 'browser-tab' && share.phase === 'sending' && <span title="Khung hình trình duyệt đã gửi tới model">gửi {share.framesSent} khung · ~{share.sendFps ?? '—'}/s</span>}
               <span>{status.processed_fps ?? '—'} khung/s</span>
               <span>trễ {status.latency_ms_p50 ?? '—'} ms</span>
               <span className="mono">{elapsed(status.elapsed_seconds)}</span>

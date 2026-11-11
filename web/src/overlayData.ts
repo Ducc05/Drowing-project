@@ -108,3 +108,15 @@ export function useAlarmSound(active: boolean) {
     return () => { window.clearInterval(timer); void context.close() }
   }, [active])
 }
+
+/** Flashes the browser tab title while ``active`` so an alert is visible even when this tab is in the background. */
+export function useTitleAlert(active: boolean, text = '⚠ ĐUỐI NƯỚC') {
+  useEffect(() => {
+    if (!active) return
+    const original = document.title
+    let on = false
+    const timer = window.setInterval(() => { on = !on; document.title = on ? text : original }, 1000)
+    document.title = text
+    return () => { window.clearInterval(timer); document.title = original }
+  }, [active, text])
+}

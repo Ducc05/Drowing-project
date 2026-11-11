@@ -19,8 +19,9 @@ from drowning.db.models import Job
 from drowning.db.repositories import (ExecutionSlotBusy, StaleExecutionOwner, claim_execution_slot, create_job,
                                       release_execution_slot, transition_job)
 from drowning.domain.jobs import JobState
-from drowning.inference.camera import (CameraConnectError, CameraSession, CameraSourceError, CameraStopUnconfirmed,
-                                        parse_camera_source, probe_camera)
+from drowning.inference.camera import (BROWSER_TAB_SOURCE, CameraConnectError, CameraSession, CameraSourceError,
+                                        CameraStopUnconfirmed, PushCapture, decode_frame, parse_camera_source,
+                                        probe_camera)
 from drowning.installation import installation_id
 
 
@@ -37,12 +38,16 @@ class CameraNotRunning(RuntimeError):
 class CameraService:
     def __init__(self, session_factory: sessionmaker, settings: Settings, *,
                  inference_factory: Callable[..., Any] | None = None,
-                 capture_factory: Callable[[Any], Any] | None = None, stop_timeout: float = 10.0):
+                 capture_factory: Callable[[Any], Any] | None = None, stop_timeout: float = 10.0,
+                 push_read_timeout: float = 1.0, push_first_frame_timeout: float = 20.0):
         self.factory = session_factory
         self.settings = settings
         self.inference_factory = inference_factory
         self.capture_factory = capture_factory
         self.stop_timeout = stop_timeout
+        self.push_read_timeout = push_read_timeout
+        self.push_first_frame_timeout = push_first_frame_timeout
+        self._push: PushCapture | None = None
         self.installation = installation_id(Path(settings.input_cache_dir).expanduser().resolve().parent)
         self._lock = threading.RLock()
         self._session: CameraSession | None = None
@@ -72,19 +77,22 @@ class CameraService:
                                    compute_stopped_confirmed=True)
 
     def _forget(self) -> None:
-        self._session, self._job_id, self._fence = None, None, None
+        self._session, self._job_id, self._fence, self._push = None, None, None, None
 
     # -- operations ------------------------------------------------------------------------
     def probe(self, raw_source: str) -> dict[str, Any]:
         source, display = parse_camera_source(raw_source)
+        if source == BROWSER_TAB_SOURCE:
+            raise CameraSourceError("nguồn browser-tab không cần kiểm tra kết nối")
         with self._lock:
             if self._session is not None and self._session.is_alive():
                 raise CameraBusy(self._job_id, "A camera session is already running; stop it before probing")
         return {**probe_camera(source, self.capture_factory), "source": display}
 
     def start(self, raw_source: str, idempotency_key: str, *, confidence: float | None = None,
-              cell_grid: str | None = None) -> dict[str, Any]:
+              cell_grid: str | None = None, fps: int | None = None) -> dict[str, Any]:
         source, display = parse_camera_source(raw_source)
+        is_tab = source == BROWSER_TAB_SOURCE
         if len(idempotency_key.strip()) < 8:
             raise CameraSourceError("idempotency_key must contain at least eight characters")
         try:
@@ -109,7 +117,8 @@ class CameraService:
                 job, created = create_job(session, job_type="inference", idempotency_key=idempotency_key, payload={
                     "executor": "local", "modality": "camera", "source": display,
                     "model_version_id": str(model_record.id), "installation_id": self.installation,
-                    "confidence_threshold": threshold, "cell_grid": format_cell_grid(grid), "pid": os.getpid()})
+                    "confidence_threshold": threshold, "cell_grid": format_cell_grid(grid), "pid": os.getpid(),
+                    **({"capture": "browser_tab", "send_fps": fps or 10} if is_tab else {})})
             if not created:
                 raise CameraBusy(job.id, "This Idempotency-Key was already used; start a new session with a new key")
             try:
@@ -121,6 +130,12 @@ class CameraService:
                                    event_type="camera_slot_busy")
                 raise CameraBusy(job.id, "The shared compute slot is busy; the camera request was cancelled") from exc
             self._job_id, self._fence = job.id, (self.settings.worker_id, token)
+            capture_factory = self.capture_factory
+            if is_tab:
+                # Created before the model loads so early browser frames are accepted rather than rejected.
+                self._push = push = PushCapture(fps or 10, read_timeout=self.push_read_timeout,
+                                                first_frame_timeout=self.push_first_frame_timeout)
+                capture_factory = lambda _source: push  # noqa: E731
             camera: CameraSession | None = None
             try:
                 self._transition(JobState.DISPATCHING, "loading_pinned_model", "camera_claimed",
@@ -129,13 +144,14 @@ class CameraService:
                     pipeline, loaded = load_approved_pipeline(session, self.settings, pinned_model_id=model_record.id,
                                                               inference_factory=self.inference_factory, cell_grid=grid)
                 apply_confidence_threshold(pipeline, threshold)
-                camera = CameraSession(pipeline, source, display_source=display, capture_factory=self.capture_factory)
+                camera = CameraSession(pipeline, source, display_source=display, capture_factory=capture_factory)
                 geometry = camera.start()
                 self._session = camera
                 self._payload(model_version_id=str(loaded.id), camera_geometry=geometry)
                 self._transition(JobState.RUNNING, "camera_running", "camera_started", geometry)
             except StaleExecutionOwner:
                 self._session = None
+                self._push = None
                 raise
             except Exception as exc:
                 self._session = None
@@ -232,6 +248,25 @@ class CameraService:
             apply_confidence_threshold(self._session.pipeline, threshold)
             self._payload(confidence_threshold=threshold)
             return {"confidence_threshold": threshold}
+
+    def push_frame(self, jpeg: bytes) -> dict[str, Any]:
+        """Accept one browser-captured JPEG for the running ``browser-tab`` session.
+
+        Deliberately does not take ``self._lock``: ``start`` holds it while the model loads and the
+        browser keeps posting frames during that time.
+        """
+        push = self._push
+        if push is None or push.released:
+            raise CameraNotRunning("No browser-tab camera session is running on this installation")
+        frame = decode_frame(jpeg)
+        if push.shape is not None and tuple(frame.shape[:2]) != push.shape:
+            raise CameraSourceError(f"frame size {frame.shape[1]}x{frame.shape[0]} differs from the session's "
+                                    f"{push.shape[1]}x{push.shape[0]}")
+        push.push(frame)
+        session = self._session
+        summary = session.summary() if session is not None else {}
+        return {"alert_track_ids": list(summary.get("alert_track_ids", [])),
+                "frames_processed": int(summary.get("frames_processed", 0))}
 
     def owns(self, job_id: UUID) -> bool:
         return self._job_id == job_id and self._session is not None

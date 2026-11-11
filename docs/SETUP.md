@@ -150,3 +150,13 @@ Xác nhận theo ô (chống báo nhầm người cứu hộ): khung hình đư�
 Điều kiện chuyển động (chống báo nhầm người bơi/cứu hộ): với mỗi track, hệ thống đo kích thước vùng mà tâm box đã đi qua trong cửa sổ `H20SAVER_MOTION_WINDOW_SECONDS` (đường chéo hình chữ nhật bao các tâm), chia cho kích thước thân người (cạnh dài hơn của box). Đơn vị là "thân người" nên không phụ thuộc xa/gần hay độ phân giải. Track đi quá `H20SAVER_MOTION_MAX_BODY_LENGTHS` thì không được xác nhận cảnh báo; người vùng vẫy tại chỗ hoặc trôi chậm vẫn được xác nhận và không bị trễ thêm. Thời gian tính bằng mili-giây của khung nên không đổi theo `frame_stride`. Điều kiện này độc lập với lưới: đặt `H20SAVER_CELL_GRID=off` để chỉ dùng chuyển động, hoặc để cả hai (cảnh báo chỉ lên khi qua cả hai lớp). Mỗi bản ghi có thêm `motion` (số thân người đã đi) và `alert_suppressed_by_motion`. Chưa bù chuyển động của camera (xoay/zoom). Ngưỡng 1.5 và cửa sổ 3 giây là giá trị khởi đầu **chưa được đánh giá**.
 
 Engine này không đi qua luồng duyệt model Kaggle/Drive: nó không có bản ghi trong registry. Trang Đánh giá vẫn chạy model registry khi bạn chọn một candidate cụ thể. Đặt lại `DETECTION_ENGINE=classifier` để quay về luồng cũ.
+
+## Quét tab trình duyệt như camera trực tiếp
+
+Trang Camera có nguồn **Quét tab/cửa sổ**: mở video (ví dụ YouTube) ở một tab khác, bấm "Chọn tab để quét…" và chọn đúng tab đó.
+
+- Chỉ Chrome/Edge (cần `getDisplayMedia` và `MediaStreamTrackProcessor`), mở app qua `localhost`.
+- Trình duyệt nén khoảng 10 khung JPEG/giây gửi tới `POST /api/v1/camera/frame`; server coi đó là nguồn `browser-tab` và xử lý như camera (cùng model đã duyệt, ô compute chung, ngưỡng và lưới ô).
+- Khung hình chỉ nằm trong RAM (khung mới nhất), không ghi ra đĩa, DB hay Drive. Tab của chính app tự bị loại khỏi danh sách để không lặp hình.
+- Nếu model chậm hơn nguồn, khung cũ bị bỏ. Khi bạn bấm "Dừng chia sẻ" của trình duyệt, phiên camera tự dừng; nếu ngừng gửi khung (ví dụ đóng tab app) phiên báo lỗi sau khoảng nửa phút và nhả ô compute.
+- Để cảnh báo chắc chắn đến kịp, mở app thành cửa sổ riêng cạnh cửa sổ video; cửa sổ bị che hoàn toàn có thể bị trình duyệt giảm tốc.

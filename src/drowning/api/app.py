@@ -27,8 +27,9 @@ from drowning.installation import installation_id
 from drowning.orchestration.supervisor import JobSupervisor
 from drowning.api.inference import (CONFIDENCE_MAX, CONFIDENCE_MIN, InferenceUnavailable, cell_grid_info,
                                     default_confidence, get_approved_model, runtime_weights_missing)
-from drowning.inference.camera import (STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
+from drowning.inference.camera import (MAX_FRAME_BYTES, STREAM_MEDIA_TYPE, CameraConnectError, CameraSourceError,
                                         CameraStopUnconfirmed)
+from starlette.concurrency import run_in_threadpool
 from drowning.api.media import MAX_MEDIA_UPLOAD_BYTES
 from drowning.api.test_jobs import (LocalInferenceCancelled, LocalInferenceFailed, LocalMediaTestJobs,
                                     MediaRequestConflict, MediaSlotBusy)
@@ -98,10 +99,11 @@ class PresenceMarkRequest(BaseModel):
 
 
 class CameraStartRequest(BaseModel):
-    source: str = Field(min_length=1, max_length=2000, description="Webcam index (0-15) or http/https/rtsp/rtmp URL")
+    source: str = Field(min_length=1, max_length=2000, description="Webcam index (0-15), http/https/rtsp/rtmp URL or browser-tab")
     idempotency_key: str = Field(min_length=8, max_length=200)
     confidence: float | None = Field(default=None, ge=0.05, le=0.95, description="Per-box confidence threshold")
     cell_grid: str | None = Field(default=None, max_length=16, description='Cell gate grid "CxR" or "off"')
+    fps: int | None = Field(default=None, ge=1, le=30, description="Nominal frames per second sent by the browser (browser-tab only)")
 
 
 class CameraConfidenceRequest(BaseModel):
@@ -415,6 +417,13 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
             raise HTTPException(status_code=503, detail="PostgreSQL is not configured")
         return service
 
+    def get_camera_no_db(request: Request) -> CameraService:
+        """Per-frame uploads must not pay a database round trip (``get_session`` checks the schema every call)."""
+        service = request.app.state.camera
+        if service is None:
+            raise HTTPException(status_code=503, detail="PostgreSQL is not configured")
+        return service
+
     def camera_call(action: Callable[[], Any]):
         try:
             return action()
@@ -506,7 +515,17 @@ def create_app(*, settings: Settings | None = None, engine: Engine | None = None
     @app.post("/api/v1/camera/start")
     def camera_start(body: CameraStartRequest, service: CameraService = Depends(get_camera)):
         return camera_call(lambda: service.start(body.source, body.idempotency_key, confidence=body.confidence,
-                                                         cell_grid=body.cell_grid))
+                                                         cell_grid=body.cell_grid, fps=body.fps))
+
+    @app.post("/api/v1/camera/frame")
+    async def camera_frame(request: Request, service: CameraService = Depends(get_camera_no_db)):
+        declared = request.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > MAX_FRAME_BYTES:
+            raise HTTPException(status_code=413, detail="frame is larger than the allowed size")
+        body = await request.body()
+        if len(body) > MAX_FRAME_BYTES:
+            raise HTTPException(status_code=413, detail="frame is larger than the allowed size")
+        return await run_in_threadpool(camera_call, lambda: service.push_frame(body))
 
     @app.post("/api/v1/camera/confidence")
     def camera_confidence(body: CameraConfidenceRequest, service: CameraService = Depends(get_camera)):

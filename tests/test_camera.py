@@ -1,23 +1,30 @@
 """Camera session and Start/Stop API tests with a scripted capture device (no real webcam)."""
 import asyncio
+import io
 import json
 import tempfile
+import threading
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import cv2
 import httpx
 import numpy as np
+from PIL import Image
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from drowning.api.app import create_app
+from drowning.api.camera import CameraNotRunning
 from drowning.config import Settings
 from drowning.db.models import Artifact, Base, ExecutionSlot, Job, JobEvent, ModelRegistry, ModelVersion
-from drowning.inference.camera import (CameraConnectError, CameraSession, CameraSourceError, CameraStopUnconfirmed,
-                                        parse_camera_source, probe_camera, redact_source)
+from drowning.inference.camera import (MAX_FRAME_BYTES, CameraConnectError, CameraSession, CameraSourceError,
+                                        CameraStopUnconfirmed, PushCapture, decode_frame, parse_camera_source,
+                                        probe_camera, redact_source)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,13 +53,20 @@ class ScriptedCapture:
     def release(self):
         self.released = True
 
+    def get(self, prop_id):
+        return 0.0
+
 
 class FakeStreamPipeline:
     def __init__(self, delay=0.0, hang=False):
         self.delay, self.hang = delay, hang
         self.resets = 0
         self.timestamps = []
+        self.live_fps = []
         self.tracker = type("T", (), {"name": "fixture_tracker"})()
+
+    def configure_live_stream(self, fps):
+        self.live_fps.append(fps)
 
     def reset_stream(self):
         self.resets += 1
@@ -92,6 +106,82 @@ class SourceParsingTests(unittest.TestCase):
         for bad in ("", "16", "C:\\videos\\private.mp4", "file:///etc/passwd", "/dev/video0", "ftp://host/x", "rtsp://"):
             with self.assertRaises(CameraSourceError, msg=bad):
                 parse_camera_source(bad)
+
+    def test_browser_tab_is_a_named_source(self):
+        self.assertEqual(parse_camera_source("browser-tab"), ("browser-tab", "browser-tab"))
+        self.assertEqual(parse_camera_source(" browser-tab "), ("browser-tab", "browser-tab"))
+        for bad in ("browser-tabs", "Browser-Tab", "browser-tab/x"):
+            with self.assertRaises(CameraSourceError, msg=bad):
+                parse_camera_source(bad)
+
+
+def jpeg_bytes(width=64, height=48, value=90):
+    ok, encoded = cv2.imencode(".jpg", np.full((height, width, 3), value, dtype=np.uint8))
+    assert ok
+    return encoded.tobytes()
+
+
+class PushCaptureTests(unittest.TestCase):
+    def test_read_returns_only_new_frames_and_latest_wins(self):
+        capture = PushCapture(read_timeout=0.05)
+        capture.push(np.full((4, 4, 3), 1, dtype=np.uint8))
+        capture.push(np.full((4, 4, 3), 2, dtype=np.uint8))
+        ok, frame = capture.read()
+        self.assertTrue(ok)
+        self.assertEqual(int(frame[0, 0, 0]), 2)
+        self.assertEqual(capture.read(), (False, None))
+
+    def test_first_read_waits_for_first_frame(self):
+        capture = PushCapture(first_frame_timeout=2.0, read_timeout=0.05)
+        threading.Timer(0.1, lambda: capture.push(np.zeros((4, 6, 3), dtype=np.uint8))).start()
+        ok, frame = capture.read()
+        self.assertTrue(ok)
+        self.assertEqual(frame.shape, (4, 6, 3))
+        self.assertEqual(capture.shape, (4, 6))
+        empty = PushCapture(first_frame_timeout=0.1)
+        self.assertEqual(empty.read(), (False, None))
+
+    def test_release_unblocks_reader_and_marks_closed(self):
+        capture = PushCapture(read_timeout=5.0, first_frame_timeout=5.0)
+        capture.push(np.zeros((2, 2, 3), dtype=np.uint8))
+        capture.read()
+        threading.Timer(0.1, capture.release).start()
+        started = time.monotonic()
+        self.assertEqual(capture.read(), (False, None))
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertFalse(capture.isOpened())
+        self.assertTrue(capture.released)
+
+    def test_get_reports_nominal_fps(self):
+        self.assertEqual(PushCapture(fps=12).get(5), 12.0)
+        self.assertEqual(PushCapture(fps=12).get(3), 0.0)
+
+    def test_pushed_frame_is_copied_for_the_reader(self):
+        capture = PushCapture(read_timeout=0.05)
+        source = np.zeros((2, 2, 3), dtype=np.uint8)
+        capture.push(source)
+        source[:] = 9
+        self.assertEqual(int(capture.read()[1][0, 0, 0]), 0)
+
+
+class DecodeFrameTests(unittest.TestCase):
+    def test_valid_jpeg_decodes_to_bgr(self):
+        self.assertEqual(decode_frame(jpeg_bytes(64, 48)).shape, (48, 64, 3))
+
+    def test_garbage_empty_and_oversized_payloads_are_rejected(self):
+        for bad in (b"", b"not an image", b"x" * (MAX_FRAME_BYTES + 1)):
+            with self.assertRaises(CameraSourceError):
+                decode_frame(bad)
+
+    def test_huge_declared_size_is_rejected_before_decoding(self):
+        buffer = io.BytesIO()
+        Image.new("RGB", (4000, 4000), (10, 10, 10)).save(buffer, format="JPEG", quality=20)
+        data = buffer.getvalue()
+        self.assertLess(len(data), MAX_FRAME_BYTES)
+        with unittest.mock.patch("cv2.imdecode") as imdecode:
+            with self.assertRaises(CameraSourceError):
+                decode_frame(data)
+            imdecode.assert_not_called()
 
 
 class CameraSessionTests(unittest.TestCase):
@@ -212,8 +302,43 @@ class CameraApiTests(unittest.TestCase):
         self.app = create_app(settings=settings, engine=self.engine, config_dir=ROOT / "configs" / "datasets",
                               env_file=self.root / "missing.env", inference_factory=lambda *a: self.pipeline,
                               camera_capture_factory=lambda s: ScriptedCapture(s, **self.capture_kwargs))
+        self.app.state.camera.push_read_timeout = 0.05
+        self.feeding = threading.Event()
+        self.feeder = None
+
+    def feed(self, jpeg=None, interval=0.02):
+        """Behave like the browser: keep posting frames, ignoring errors, until ``stop_feed``."""
+        jpeg = jpeg or jpeg_bytes()
+        service = self.app.state.camera
+        self.feeding.clear()
+
+        def run():
+            while not self.feeding.is_set():
+                try:
+                    service.push_frame(jpeg)
+                except Exception:
+                    pass
+                time.sleep(interval)
+
+        self.feeder = threading.Thread(target=run, daemon=True)
+        self.feeder.start()
+
+    def stop_feed(self):
+        self.feeding.set()
+        if self.feeder is not None:
+            self.feeder.join(2)
+
+    def start_tab(self, key="camera-tab-1", **extra):
+        return call(self.app, "POST", "/api/v1/camera/start",
+                    json={"source": "browser-tab", "idempotency_key": key, **extra})
 
     def tearDown(self):
+        # Other test classes reuse this tearDown without the feed helpers, so stay self-contained.
+        feeding = getattr(self, "feeding", None)
+        if feeding is not None:
+            feeding.set()
+            if self.feeder is not None:
+                self.feeder.join(2)
         service = self.app.state.camera
         if service._session is not None:
             try:
@@ -301,6 +426,117 @@ class CameraApiTests(unittest.TestCase):
         self.assertFalse(response.json()["detail"]["compute_stop_confirmed"])
         self.assertEqual(self.job_state()[0], "cancellation_requested")
         self.assertFalse(self.slot_free())
+
+    def test_browser_tab_start_status_stop_cycle(self):
+        self.feed()
+        started = self.start_tab()
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertTrue(started.json()["active"])
+        state, payload = self.job_state()
+        self.assertEqual(state, "running")
+        self.assertEqual(payload["capture"], "browser_tab")
+        self.assertEqual(payload["source"], "browser-tab")
+        self.assertFalse(self.slot_free())
+        self.assertTrue(wait_for(lambda: call(self.app, "GET", "/api/v1/camera/status").json()["frames_processed"] > 0))
+        stopped = call(self.app, "POST", "/api/v1/camera/stop")
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertEqual(self.job_state()[0], "completed")
+        self.assertTrue(self.slot_free())
+
+    def test_frames_without_a_browser_tab_session_are_rejected(self):
+        service = self.app.state.camera
+        with self.assertRaises(CameraNotRunning):
+            service.push_frame(jpeg_bytes())
+        call(self.app, "POST", "/api/v1/camera/start", json={"source": "0", "idempotency_key": "camera-session-1"})
+        with self.assertRaises(CameraNotRunning):
+            service.push_frame(jpeg_bytes())
+
+    def test_wrong_size_frame_is_rejected_but_session_survives(self):
+        self.feed()
+        self.start_tab()
+        with self.assertRaises(CameraSourceError):
+            self.app.state.camera.push_frame(jpeg_bytes(32, 24))
+        before = call(self.app, "GET", "/api/v1/camera/status").json()
+        self.assertTrue(before["active"])
+        self.assertTrue(wait_for(lambda: call(self.app, "GET", "/api/v1/camera/status").json()["frames_processed"]
+                                 > before["frames_processed"]))
+
+    def test_huge_declared_size_frame_is_rejected(self):
+        self.feed()
+        self.start_tab()
+        buffer = io.BytesIO()
+        Image.new("RGB", (4000, 4000), (10, 10, 10)).save(buffer, format="JPEG", quality=20)
+        with self.assertRaises(CameraSourceError):
+            self.app.state.camera.push_frame(buffer.getvalue())
+        self.assertTrue(call(self.app, "GET", "/api/v1/camera/status").json()["active"])
+
+    def test_stopping_the_feed_fails_the_session_and_frees_the_slot(self):
+        self.feed()
+        self.start_tab()
+        self.assertTrue(wait_for(lambda: call(self.app, "GET", "/api/v1/camera/status").json()["frames_processed"] > 0))
+        self.stop_feed()
+        self.assertTrue(wait_for(lambda: not call(self.app, "GET", "/api/v1/camera/status").json()["active"], 10))
+        self.assertEqual(self.job_state()[0], "failed")
+        self.assertTrue(self.slot_free())
+
+    def test_start_with_no_frames_fails_and_frees_the_slot(self):
+        self.app.state.camera.push_first_frame_timeout = 0.2
+        response = self.start_tab()
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(self.job_state()[0], "failed")
+        self.assertTrue(self.slot_free())
+
+    def test_probe_rejects_browser_tab(self):
+        response = call(self.app, "POST", "/api/v1/camera/probe", json={"source": "browser-tab"})
+        self.assertEqual(response.status_code, 422)
+
+    def test_fps_is_passed_to_the_pipeline_clock(self):
+        self.feed()
+        self.start_tab(fps=15)
+        self.assertEqual(self.pipeline.live_fps, [15.0])
+
+    def post_frame(self, data, **kwargs):
+        return call(self.app, "POST", "/api/v1/camera/frame", content=data,
+                    headers={"Content-Type": "image/jpeg"}, **kwargs)
+
+    def test_frame_route_returns_alert_state_and_counts(self):
+        self.feed()
+        self.start_tab()
+        response = self.post_frame(jpeg_bytes())
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertIsInstance(body["alert_track_ids"], list)
+        self.assertGreaterEqual(body["frames_processed"], 0)
+
+    def test_frame_route_conflict_without_session(self):
+        response = self.post_frame(jpeg_bytes())
+        self.assertEqual(response.status_code, 409)
+        self.assertIsInstance(response.json()["detail"], str)
+
+    def test_frame_route_rejects_oversized_body_even_with_a_running_session(self):
+        self.feed()
+        self.start_tab()
+        self.assertEqual(self.post_frame(b"x" * (MAX_FRAME_BYTES + 1)).status_code, 413)
+
+    def test_frame_route_rejects_garbage_image(self):
+        self.feed()
+        self.start_tab()
+        self.assertEqual(self.post_frame(b"not an image").status_code, 422)
+
+    def test_frame_route_does_not_touch_the_database_per_frame(self):
+        self.feed()
+        self.start_tab()
+        with unittest.mock.patch("drowning.api.app.check_db") as check:
+            for _ in range(3):
+                self.assertEqual(self.post_frame(jpeg_bytes()).status_code, 200)
+            self.assertEqual(self.post_frame(b"not an image").status_code, 422)
+            check.assert_not_called()
+
+    def test_start_accepts_fps_and_validates_range(self):
+        for bad in (0, 31):
+            self.assertEqual(self.start_tab(key=f"camera-tab-bad{bad}", fps=bad).status_code, 422)
+        self.feed()
+        self.assertEqual(self.start_tab(key="camera-tab-good", fps=15).status_code, 200)
 
 
 if __name__ == "__main__":
