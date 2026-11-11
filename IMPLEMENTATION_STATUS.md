@@ -531,3 +531,11 @@ Direction from the user: training data comes from labeled datasets they find; th
 - Code written: `useChosenModel` and `resolveModelId` in `web/src/api.ts` (one `localStorage` key `selected-model`, falls back to the active model, then the first); both `CameraPage.tsx` and `EvaluationPage.tsx` use them. Stored in this browser only, not on the server.
 - Checks run: `npm run build` OK; `npm run lint` shows no new warning. Headless Chrome against the local API: chosen model survives a reload, and a choice made on the Camera page shows on Đánh giá. No JS test runner exists, so there is no automated test for this.
 - Not verified: a Kaggle (non-H20Saver) model chosen on Đánh giá is not offered on Camera, which then falls back to the default model; that was the existing filter. User acceptance: pending.
+
+
+## 2026-11-11 - Fix: "The camera opened but returned no frame" when re-scanning a tab
+
+- Cause: Chrome tab capture delivers no frames while the captured tab is static (paused or ended video, unchanged page). The sender received one frame during model loading, got 409 (session not started yet), dropped it and then waited for a new frame that never came; after 20 s the server reported "no frame". The first scan worked only because that video was still playing.
+- Fix: `sendLoop` in `web/src/screenShare.ts` keeps the last encoded frame and re-sends it after `max(250 ms, 2000/fps)` without a new frame, so a static tab still feeds the session (and a paused tab no longer dies after ~30 s of silence).
+- Checks run: headless-off Chrome against the local API with a local test page. Before: scan, Dừng, pause the video, scan again -> error after ~25 s. After: same sequence active in ~5 s and still active (136 frames processed) after 35 s on the paused tab; scan/Dừng/scan x3 with a playing video and with immediate re-scan also OK. `npm run build` OK, no new lint warning. No JS test runner exists, so the reproduction is a browser script, not an automated test.
+- Not verified: a real YouTube tab; a static tab keeps feeding repeated frames, so a paused drowning frame can keep alerting, like a frozen live camera. Observed separately and not changed: after pressing Dừng the page can briefly show "Phiên camera trên server đã dừng." because an in-flight frame gets 409 after the server stops. User acceptance: pending.

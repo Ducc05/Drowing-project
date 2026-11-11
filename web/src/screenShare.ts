@@ -107,63 +107,80 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 async function sendLoop(id: number, track: MediaStreamTrack, fps: number) {
   const reader = new MediaStreamTrackProcessor({ track, maxBufferSize: 1 }).readable.getReader()
   const minGapUs = 1_000_000 / fps
+  // Chrome sends no frames while the captured tab is static (paused, ended, unchanged page); after this long
+  // without a new frame the last one is sent again so the server still sees a live source.
+  const idleMs = Math.max(250, 2000 / fps)
   const began = performance.now()
   const sentAt: number[] = []
   let lastUs = -Infinity, canvas: OffscreenCanvas | null = null, context: OffscreenCanvasRenderingContext2D | null = null
-  let failures = 0, sent = 0
+  let lastBlob: Blob | null = null, pending: Promise<ReadableStreamReadResult<VideoFrame>> | null = null
+  let failures = 0, sent = 0, dead = false
+
+  const encode = async (frame: VideoFrame): Promise<Blob | null> => {
+    if (frame.timestamp - lastUs < minGapUs) return null
+    lastUs = frame.timestamp
+    const width = frame.displayWidth, height = frame.displayHeight
+    if (!canvas) {
+      const scale = Math.min(1, MAX_SIDE / Math.max(width, height))
+      canvas = new OffscreenCanvas(Math.max(2, Math.round(width * scale)), Math.max(2, Math.round(height * scale)))
+      context = canvas.getContext('2d')
+    }
+    if (!context) { dead = true; fail(id, 'Không tạo được vùng vẽ để nén khung hình.'); return null }
+    // Fixed canvas size: a resized source window is letterboxed, never sent at a different size.
+    const fit = Math.min(canvas.width / width, canvas.height / height)
+    const drawW = width * fit, drawH = height * fit
+    context.fillStyle = '#000'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.drawImage(frame, (canvas.width - drawW) / 2, (canvas.height - drawH) / 2, drawW, drawH)
+    return canvas.convertToBlob({ type: 'image/jpeg', quality: JPEG_QUALITY })
+  }
+
+  /** Uploads one frame; returns false when the loop must end. */
+  const send = async (blob: Blob): Promise<boolean> => {
+    let response: Response | null = null
+    try {
+      response = await fetch(api('/api/v1/camera/frame'), { method: 'POST', body: blob, headers: { 'Content-Type': 'image/jpeg' }, cache: 'no-store' })
+    } catch { response = null }
+    if (id !== runId) return false
+    if (response?.ok) {
+      failures = 0
+      const reply = (await response.json().catch(() => ({}))) as FrameReply
+      const now = performance.now()
+      sentAt.push(now)
+      while (sentAt.length > 1 && now - sentAt[0] > 2000) sentAt.shift()
+      sent++
+      const span = (now - sentAt[0]) / 1000
+      set({ phase: 'sending', framesSent: sent, alertTracks: reply.alert_track_ids ?? [],
+        sendFps: sentAt.length > 1 && span > 0 ? Math.round(((sentAt.length - 1) / span) * 10) / 10 : state.sendFps })
+    } else if (response?.status === 409 && state.phase === 'starting') {
+      if (performance.now() - began > STARTING_GIVE_UP_MS) { fail(id, 'Server không nhận khung hình (phiên camera chưa bắt đầu).'); return false }
+      await sleep(RETRY_MS)
+    } else if (response?.status === 409) {
+      fail(id, 'Phiên camera trên server đã dừng.'); return false
+    } else if (++failures >= MAX_FAILURES) {
+      fail(id, 'Không gửi được khung hình lên server nhiều lần liên tiếp.'); return false
+    }
+    return true
+  }
+
   try {
-    while (id === runId) {
-      const { value: frame, done } = await reader.read()
-      if (done || !frame) break
-      try {
-        if (id !== runId) break
-        if (frame.timestamp - lastUs < minGapUs) continue
-        lastUs = frame.timestamp
-        const width = frame.displayWidth, height = frame.displayHeight
-        if (!canvas) {
-          const scale = Math.min(1, MAX_SIDE / Math.max(width, height))
-          canvas = new OffscreenCanvas(Math.max(2, Math.round(width * scale)), Math.max(2, Math.round(height * scale)))
-          context = canvas.getContext('2d')
-        }
-        if (!context) { fail(id, 'Không tạo được vùng vẽ để nén khung hình.'); break }
-        // Fixed canvas size: a resized source window is letterboxed, never sent at a different size.
-        const fit = Math.min(canvas.width / width, canvas.height / height)
-        const drawW = width * fit, drawH = height * fit
-        context.fillStyle = '#000'
-        context.fillRect(0, 0, canvas.width, canvas.height)
-        context.drawImage(frame, (canvas.width - drawW) / 2, (canvas.height - drawH) / 2, drawW, drawH)
-        const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: JPEG_QUALITY })
-        if (id !== runId) break
-
-        let response: Response | null = null
-        try {
-          response = await fetch(api('/api/v1/camera/frame'), { method: 'POST', body: blob, headers: { 'Content-Type': 'image/jpeg' }, cache: 'no-store' })
-        } catch { response = null }
-        if (id !== runId) break
-
-        if (response?.ok) {
-          failures = 0
-          const reply = (await response.json().catch(() => ({}))) as FrameReply
-          const now = performance.now()
-          sentAt.push(now)
-          while (sentAt.length > 1 && now - sentAt[0] > 2000) sentAt.shift()
-          sent++
-          const span = (now - sentAt[0]) / 1000
-          set({ phase: 'sending', framesSent: sent, alertTracks: reply.alert_track_ids ?? [],
-            sendFps: sentAt.length > 1 && span > 0 ? Math.round(((sentAt.length - 1) / span) * 10) / 10 : state.sendFps })
-        } else if (response?.status === 409 && state.phase === 'starting') {
-          if (performance.now() - began > STARTING_GIVE_UP_MS) { fail(id, 'Server không nhận khung hình (phiên camera chưa bắt đầu).'); break }
-          await sleep(RETRY_MS)
-        } else if (response?.status === 409) {
-          fail(id, 'Phiên camera trên server đã dừng.'); break
-        } else if (++failures >= MAX_FAILURES) {
-          fail(id, 'Không gửi được khung hình lên server nhiều lần liên tiếp.'); break
-        }
-      } finally {
-        frame.close()
+    while (id === runId && !dead) {
+      pending ??= reader.read()
+      const next = await Promise.race([pending, sleep(idleMs).then(() => null)])
+      let blob: Blob | null
+      if (next === null) {
+        blob = lastBlob
+      } else {
+        pending = null
+        if (next.done || !next.value) break
+        try { blob = await encode(next.value) } finally { next.value.close() }
+        if (blob) lastBlob = blob
       }
+      if (!blob || id !== runId) continue
+      if (!(await send(blob))) break
     }
   } finally {
     reader.cancel().catch(() => undefined)
+    pending?.then((result) => result.value?.close(), () => undefined)
   }
 }
